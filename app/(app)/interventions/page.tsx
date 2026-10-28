@@ -1,2 +1,92 @@
-import { ComingSoon } from "@/components/coming-soon"
-export default function InterventionsPage() { return <ComingSoon title="Interventions" description="Plan, monitor, and reflect on the support you provide." /> }
+"use client"
+
+import { FormEvent, useMemo, useState } from "react"
+import useSWR from "swr"
+import { CalendarDays, CheckCircle2, ClipboardList, Eye, FileText, Plus, Search, X } from "lucide-react"
+import { createClient } from "@/lib/supabase/client"
+import { Button } from "@/components/ui/button"
+
+type Student = { id: string; student_number: string; first_name: string; last_name: string; class_id: string }
+type Intervention = { id: string; student_id: string; concern: string; intervention_type: string; description: string | null; expected_outcome: string | null; start_date: string | null; target_review_date: string | null; status: "planned" | "ongoing" | "completed" | "on_hold"; outcome_notes: string | null; goal_achieved: boolean | null; teacher_notes: string | null }
+type ProgressNote = { id: string; intervention_id: string; activity_date: string; activities_completed: string | null; observed_progress: string | null; challenges: string | null; next_steps: string | null }
+type Data = { students: Student[]; interventions: Intervention[]; notes: ProgressNote[] }
+
+type InterventionForm = { student_id: string; concern: string; intervention_type: string; description: string; expected_outcome: string; start_date: string; target_review_date: string; status: Intervention["status"]; teacher_notes: string }
+const emptyForm: InterventionForm = { student_id: "", concern: "", intervention_type: "Small-group support", description: "", expected_outcome: "", start_date: new Date().toISOString().slice(0, 10), target_review_date: "", status: "planned", teacher_notes: "" }
+const types = ["Small-group support", "One-on-one tutoring", "Parent conference", "Behavior support", "Attendance support", "Referral", "Other"]
+
+async function fetchInterventions(): Promise<Data> {
+  const supabase = createClient()
+  const { data: auth } = await supabase.auth.getUser()
+  if (!auth.user) throw new Error("Please sign in again to load interventions.")
+  const [students, interventions, notes] = await Promise.all([
+    supabase.from("students").select("id, student_number, first_name, last_name, class_id").eq("is_active", true).order("last_name"),
+    supabase.from("interventions").select("id, student_id, concern, intervention_type, description, expected_outcome, start_date, target_review_date, status, outcome_notes, goal_achieved, teacher_notes").order("updated_at", { ascending: false }),
+    supabase.from("intervention_progress_notes").select("id, intervention_id, activity_date, activities_completed, observed_progress, challenges, next_steps").order("activity_date", { ascending: false }),
+  ])
+  if (students.error) throw students.error
+  if (interventions.error) throw interventions.error
+  if (notes.error) throw notes.error
+  return { students: students.data ?? [], interventions: interventions.data ?? [], notes: notes.data ?? [] }
+}
+
+function statusClass(status: Intervention["status"]) { return status === "ongoing" ? "bg-primary/10 text-primary" : status === "completed" ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : status === "on_hold" ? "bg-amber-500/10 text-amber-700 dark:text-amber-300" : "bg-muted text-muted-foreground" }
+function studentName(student?: Student) { return student ? `${student.last_name}, ${student.first_name}` : "Unknown pupil" }
+
+export default function InterventionsPage() {
+  const { data, error, isLoading, mutate } = useSWR("teacher-interventions", fetchInterventions)
+  const [search, setSearch] = useState("")
+  const [status, setStatus] = useState<"all" | Intervention["status"]>("all")
+  const [showForm, setShowForm] = useState(false)
+  const [editing, setEditing] = useState<Intervention | null>(null)
+  const [selected, setSelected] = useState<Intervention | null>(null)
+  const [form, setForm] = useState<InterventionForm>(emptyForm)
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState("")
+  const students = data?.students ?? []
+  const interventions = data?.interventions ?? []
+  const notes = data?.notes ?? []
+  const rows = useMemo(() => interventions.filter((item) => {
+    const student = students.find((entry) => entry.id === item.student_id)
+    return (status === "all" || item.status === status) && `${studentName(student)} ${item.concern} ${item.intervention_type}`.toLowerCase().includes(search.toLowerCase())
+  }), [interventions, students, status, search])
+  const counts = { active: interventions.filter((item) => item.status === "planned" || item.status === "ongoing").length, completed: interventions.filter((item) => item.status === "completed").length, review: interventions.filter((item) => item.target_review_date && item.target_review_date <= new Date().toISOString().slice(0, 10) && item.status !== "completed").length }
+
+  const openForm = (intervention?: Intervention) => {
+    setMessage(""); setEditing(intervention ?? null)
+    setForm(intervention ? { student_id: intervention.student_id, concern: intervention.concern, intervention_type: intervention.intervention_type, description: intervention.description ?? "", expected_outcome: intervention.expected_outcome ?? "", start_date: intervention.start_date ?? "", target_review_date: intervention.target_review_date ?? "", status: intervention.status, teacher_notes: intervention.teacher_notes ?? "" } : { ...emptyForm, student_id: students[0]?.id ?? "" })
+    setShowForm(true)
+  }
+
+  const saveIntervention = async (event: FormEvent) => {
+    event.preventDefault(); setMessage("")
+    if (!form.student_id || !form.concern.trim() || !form.intervention_type || !form.start_date) return setMessage("Pupil, concern, intervention type, and start date are required.")
+    if (form.target_review_date && form.target_review_date < form.start_date) return setMessage("The review date cannot be earlier than the start date.")
+    setSaving(true)
+    const supabase = createClient(); const { data: auth } = await supabase.auth.getUser()
+    if (!auth.user) { setMessage("Your session has expired. Please sign in again."); setSaving(false); return }
+    const payload = { teacher_id: auth.user.id, student_id: form.student_id, concern: form.concern.trim(), intervention_type: form.intervention_type, description: form.description.trim() || null, expected_outcome: form.expected_outcome.trim() || null, start_date: form.start_date, target_review_date: form.target_review_date || null, status: form.status, teacher_notes: form.teacher_notes.trim() || null }
+    const result = editing ? await supabase.from("interventions").update(payload).eq("id", editing.id) : await supabase.from("interventions").insert(payload)
+    if (result.error) setMessage(result.error.message)
+    else { setShowForm(false); setEditing(null); await mutate() }
+    setSaving(false)
+  }
+
+  const updateStatus = async (item: Intervention, nextStatus: Intervention["status"]) => {
+    const { error: updateError } = await createClient().from("interventions").update({ status: nextStatus }).eq("id", item.id)
+    if (updateError) setMessage(updateError.message); else { await mutate(); setSelected({ ...item, status: nextStatus }) }
+  }
+
+  if (isLoading) return <section className="mx-auto max-w-7xl p-6"><p className="text-sm text-muted-foreground">Loading intervention plans…</p></section>
+  if (error) return <section className="mx-auto max-w-7xl p-6"><div className="rounded-xl border border-destructive/30 bg-destructive/5 p-5"><h1 className="font-semibold">Unable to load interventions</h1><p className="mt-2 text-sm text-muted-foreground">{error.message}</p></div></section>
+
+  return <section className="mx-auto flex max-w-7xl flex-col gap-6 p-6 lg:p-8">
+    <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><p className="text-sm font-medium text-primary">Targeted learner support</p><h1 className="mt-1 text-3xl font-bold tracking-tight">Interventions</h1><p className="mt-2 max-w-2xl text-muted-foreground">Plan, monitor, and reflect on the support you provide to pupils.</p></div><Button onClick={() => openForm()} disabled={!students.length}><Plus data-icon="inline-start" />New intervention</Button></div>
+    <div className="grid gap-4 sm:grid-cols-3"><div className="rounded-xl border bg-card p-5"><div className="flex items-center justify-between"><p className="text-sm text-muted-foreground">Active plans</p><ClipboardList className="text-muted-foreground" /></div><p className="mt-3 text-3xl font-bold">{counts.active}</p></div><div className="rounded-xl border bg-card p-5"><div className="flex items-center justify-between"><p className="text-sm text-muted-foreground">Due for review</p><CalendarDays className="text-muted-foreground" /></div><p className="mt-3 text-3xl font-bold">{counts.review}</p></div><div className="rounded-xl border bg-card p-5"><div className="flex items-center justify-between"><p className="text-sm text-muted-foreground">Completed plans</p><CheckCircle2 className="text-muted-foreground" /></div><p className="mt-3 text-3xl font-bold">{counts.completed}</p></div></div>
+    <div className="flex flex-wrap gap-3 rounded-xl border bg-card p-4"><label className="flex min-w-56 flex-1 items-center gap-2 rounded-lg border px-3 py-2 text-sm"><Search /><span className="sr-only">Search interventions</span><input value={search} onChange={(event) => setSearch(event.target.value)} className="min-w-0 flex-1 bg-transparent outline-none" placeholder="Search pupil or concern" /></label><select aria-label="Intervention status" value={status} onChange={(event) => setStatus(event.target.value as typeof status)} className="rounded-lg border bg-background px-3 py-2 text-sm"><option value="all">All statuses</option><option value="planned">Planned</option><option value="ongoing">Ongoing</option><option value="completed">Completed</option><option value="on_hold">On hold</option></select></div>
+    <div className="overflow-hidden rounded-xl border bg-card"><div className="border-b p-5"><h2 className="font-semibold">Intervention register</h2><p className="mt-1 text-sm text-muted-foreground">{rows.length} plan{rows.length === 1 ? "" : "s"} shown</p></div>{!students.length ? <div className="p-12 text-center text-sm text-muted-foreground">Add pupils first to create an intervention plan.</div> : rows.length === 0 ? <div className="p-12 text-center text-sm text-muted-foreground">No intervention plans match your filters.</div> : <div className="overflow-x-auto"><table className="w-full min-w-[900px] text-left text-sm"><thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground"><tr><th className="px-5 py-3">Pupil</th><th className="px-5 py-3">Concern</th><th className="px-5 py-3">Intervention</th><th className="px-5 py-3">Start date</th><th className="px-5 py-3">Review date</th><th className="px-5 py-3">Status</th><th className="px-5 py-3 text-right">Actions</th></tr></thead><tbody className="divide-y">{rows.map((item) => { const student = students.find((entry) => entry.id === item.student_id); return <tr key={item.id}><td className="px-5 py-4"><p className="font-medium">{studentName(student)}</p><p className="text-xs text-muted-foreground">{student?.student_number}</p></td><td className="max-w-52 px-5 py-4">{item.concern}</td><td className="px-5 py-4 text-muted-foreground">{item.intervention_type}</td><td className="px-5 py-4 text-muted-foreground">{item.start_date ?? "—"}</td><td className="px-5 py-4 text-muted-foreground">{item.target_review_date ?? "—"}</td><td className="px-5 py-4"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${statusClass(item.status)}`}>{item.status.replace("_", " ")}</span></td><td className="px-5 py-4"><div className="flex justify-end gap-1"><Button variant="ghost" size="sm" onClick={() => setSelected(item)}><Eye data-icon="inline-start" />View</Button><Button variant="ghost" size="sm" onClick={() => openForm(item)}>Edit</Button></div></td></tr>})}</tbody></table></div>}</div>
+    {message && <p className="text-sm text-destructive" role="alert">{message}</p>}
+    {showForm && <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/30 p-4" role="dialog" aria-modal="true"><form onSubmit={saveIntervention} className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border bg-card p-6 shadow-xl"><div className="flex items-start justify-between"><div><p className="text-sm text-primary">Support plan</p><h2 className="mt-1 text-xl font-semibold">{editing ? "Edit intervention" : "New intervention"}</h2></div><button type="button" onClick={() => setShowForm(false)} aria-label="Close"><X /></button></div><div className="mt-6 grid gap-4 sm:grid-cols-2"><label className="grid gap-1.5 text-sm font-medium sm:col-span-2">Pupil<select required value={form.student_id} onChange={(event) => setForm({ ...form, student_id: event.target.value })} className="rounded-lg border bg-background px-3 py-2 font-normal"><option value="">Select pupil</option>{students.map((student) => <option key={student.id} value={student.id}>{studentName(student)} ({student.student_number})</option>)}</select></label><label className="grid gap-1.5 text-sm font-medium sm:col-span-2">Primary concern<input required value={form.concern} onChange={(event) => setForm({ ...form, concern: event.target.value })} className="rounded-lg border bg-background px-3 py-2 font-normal outline-none focus:ring-2 focus:ring-ring" placeholder="e.g. Reading fluency" /></label><label className="grid gap-1.5 text-sm font-medium">Intervention type<select required value={form.intervention_type} onChange={(event) => setForm({ ...form, intervention_type: event.target.value })} className="rounded-lg border bg-background px-3 py-2 font-normal">{types.map((item) => <option key={item}>{item}</option>)}</select></label><label className="grid gap-1.5 text-sm font-medium">Status<select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value as Intervention["status"] })} className="rounded-lg border bg-background px-3 py-2 font-normal"><option value="planned">Planned</option><option value="ongoing">Ongoing</option><option value="completed">Completed</option><option value="on_hold">On hold</option></select></label><label className="grid gap-1.5 text-sm font-medium">Start date<input required type="date" value={form.start_date} onChange={(event) => setForm({ ...form, start_date: event.target.value })} className="rounded-lg border bg-background px-3 py-2 font-normal" /></label><label className="grid gap-1.5 text-sm font-medium">Target review date<input type="date" min={form.start_date} value={form.target_review_date} onChange={(event) => setForm({ ...form, target_review_date: event.target.value })} className="rounded-lg border bg-background px-3 py-2 font-normal" /></label><label className="grid gap-1.5 text-sm font-medium sm:col-span-2">Support activities<textarea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} className="min-h-24 rounded-lg border bg-background px-3 py-2 font-normal" placeholder="Describe the activities and frequency." /></label><label className="grid gap-1.5 text-sm font-medium sm:col-span-2">Expected outcome<textarea value={form.expected_outcome} onChange={(event) => setForm({ ...form, expected_outcome: event.target.value })} className="min-h-20 rounded-lg border bg-background px-3 py-2 font-normal" placeholder="What change should this support produce?" /></label><label className="grid gap-1.5 text-sm font-medium sm:col-span-2">Teacher notes<textarea value={form.teacher_notes} onChange={(event) => setForm({ ...form, teacher_notes: event.target.value })} className="min-h-20 rounded-lg border bg-background px-3 py-2 font-normal" /></label></div><div className="mt-6 flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => setShowForm(false)}>Cancel</Button><Button type="submit" disabled={saving}>{saving ? "Saving…" : "Save intervention"}</Button></div></form></div>}
+    {selected && <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/30 p-4" role="dialog" aria-modal="true"><div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border bg-card p-6 shadow-xl"><div className="flex items-start justify-between"><div><p className="text-sm text-primary">Intervention plan</p><h2 className="mt-1 text-2xl font-semibold">{studentName(students.find((student) => student.id === selected.student_id))}</h2><p className="mt-1 text-sm text-muted-foreground">{selected.concern}</p></div><button onClick={() => setSelected(null)} aria-label="Close"><X /></button></div><div className="mt-5 flex items-center justify-between rounded-xl border p-4"><span className={`rounded-full px-3 py-1 text-sm font-semibold ${statusClass(selected.status)}`}>{selected.status.replace("_", " ")}</span><Button variant="outline" size="sm" onClick={() => updateStatus(selected, selected.status === "completed" ? "ongoing" : "completed")}>{selected.status === "completed" ? "Reopen plan" : "Mark completed"}</Button></div><div className="mt-6 grid gap-4 sm:grid-cols-2"><div><p className="text-xs text-muted-foreground">Intervention type</p><p className="mt-1 font-medium">{selected.intervention_type}</p></div><div><p className="text-xs text-muted-foreground">Review date</p><p className="mt-1 font-medium">{selected.target_review_date ?? "Not set"}</p></div><div className="sm:col-span-2"><p className="text-xs text-muted-foreground">Support activities</p><p className="mt-1 whitespace-pre-wrap text-sm">{selected.description || "Not recorded"}</p></div><div className="sm:col-span-2"><p className="text-xs text-muted-foreground">Expected outcome</p><p className="mt-1 whitespace-pre-wrap text-sm">{selected.expected_outcome || "Not recorded"}</p></div></div><div className="mt-7 border-t pt-5"><div className="flex items-center gap-2"><FileText className="text-primary" /><h3 className="font-semibold">Progress notes</h3></div>{notes.filter((note) => note.intervention_id === selected.id).length ? <div className="mt-4 flex flex-col gap-3">{notes.filter((note) => note.intervention_id === selected.id).map((note) => <div key={note.id} className="rounded-xl border p-4"><p className="text-sm font-medium">{note.activity_date}</p><p className="mt-2 text-sm text-muted-foreground">{note.observed_progress || note.activities_completed || "Progress note recorded."}</p></div>)}</div> : <p className="mt-3 text-sm text-muted-foreground">No progress notes have been recorded yet.</p>}</div></div></div>}
+  </section>
+}
