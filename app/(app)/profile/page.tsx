@@ -72,12 +72,30 @@ export default function ProfilePage() {
     const overlap = schedule.some((a, index) => schedule.some((b, other) => index !== other && a.day_of_week === b.day_of_week && a.start_time < b.end_time && b.start_time < a.end_time))
     if (overlap) { setError("Schedule entries overlap. Resolve the conflict before saving."); return }
     setSaving(true); setError("")
-    const payload = { grade_level: classEditor.grade_level, section_name: classEditor.section_name.trim(), school_year: classEditor.school_year, subject_name: classEditor.subject_name || null, room: classEditor.room || null, teacher_id: profile.id, is_active: true }
-    const result = classEditor.id ? await supabase.from("classes").update(payload).eq("id", classEditor.id).select("id").single() : await supabase.from("classes").insert(payload).select("id").single()
-    if (result.error || !result.data) { setError(result.error?.message ?? "Unable to save class."); setSaving(false); return }
-    await supabase.from("class_schedules").delete().eq("class_id", result.data.id)
-    if (schedule.length) await supabase.from("class_schedules").insert(schedule.map(({ id, ...entry }) => ({ ...entry, class_id: result.data.id, teacher_id: profile.id, subject_name: entry.subject_name || null, room: entry.room || null })))
-    setClassEditor(null); setMessage("Class saved."); setSaving(false); loadData()
+    const payload = { grade_level: classEditor.grade_level, section_name: classEditor.section_name.trim(), school_year: classEditor.school_year, subject_name: classEditor.subject_name?.trim() || null, room: classEditor.room?.trim() || null, teacher_id: profile.id, is_active: true }
+    const result = classEditor.id
+      ? await supabase.from("classes").update(payload).eq("id", classEditor.id).eq("teacher_id", profile.id).select("id").single()
+      : await supabase.from("classes").insert(payload).select("id").single()
+    if (result.error || !result.data) {
+      setError(result.error?.code === "23505" ? "You already have this grade, section, and school year." : result.error?.message ?? "Unable to save class.")
+      setSaving(false)
+      return
+    }
+    const classId = result.data.id
+    const { error: deleteScheduleError } = await supabase.from("class_schedules").delete().eq("class_id", classId).eq("teacher_id", profile.id)
+    if (deleteScheduleError) { setError(deleteScheduleError.message); setSaving(false); return }
+    if (schedule.length) {
+      const { error: scheduleError } = await supabase.from("class_schedules").insert(schedule.map(({ id: _id, ...entry }) => ({ ...entry, class_id: classId, teacher_id: profile.id, subject_name: entry.subject_name.trim(), room: entry.room.trim() || null })))
+      if (scheduleError) {
+        setError(scheduleError.message)
+        setSaving(false)
+        return
+      }
+    }
+    setClassEditor(null)
+    setMessage("Class saved.")
+    setSaving(false)
+    await loadData()
   }
   async function deleteClass(item: ClassItem) { if (!window.confirm(`Archive Grade ${item.grade_level} – ${item.section_name}? Existing academic history will be preserved.`)) return; setSaving(true); await supabase.from("classes").update({ is_active: false }).eq("id", item.id); setSaving(false); setMessage("Class archived."); loadData() }
 
