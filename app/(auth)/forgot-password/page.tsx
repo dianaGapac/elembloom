@@ -1,0 +1,2 @@
+import Link from "next/link"
+export default function ForgotPasswordPage() { return <div className="flex min-h-screen items-center justify-center p-6"><div className="w-full max-w-md rounded-2xl border border-border bg-white p-8 shadow-sm"><h1 className="text-2xl font-bold">Reset your password</h1><p className="mt-2 text-sm text-muted-foreground">Password recovery will be available once authentication is connected.</p><Link href="/login" className="mt-8 block text-sm font-medium text-primary hover:underline">Back to sign in</Link></div></div> }

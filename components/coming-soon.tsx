@@ -1,0 +1,5 @@
+import { Construction, Sparkles } from "lucide-react"
+
+export function ComingSoon({ title, description }: { title: string; description: string }) {
+  return <section className="mx-auto flex min-h-[calc(100vh-10rem)] max-w-5xl flex-col justify-center"><div className="mb-8 flex items-center gap-2 text-sm font-medium text-primary"><Sparkles aria-hidden="true" />ElemBloom workspace</div><h1 className="text-3xl font-bold tracking-tight lg:text-4xl">{title}</h1><p className="mt-3 max-w-xl text-muted-foreground">{description}</p><div className="mt-10 flex max-w-2xl flex-col items-center justify-center rounded-2xl border border-dashed border-primary/30 bg-white px-6 py-16 text-center shadow-sm"><span className="flex size-14 items-center justify-center rounded-2xl bg-secondary text-primary"><Construction aria-hidden="true" /></span><h2 className="mt-5 text-lg font-semibold">Coming soon</h2><p className="mt-2 text-sm text-muted-foreground">This section is part of the ElemBloom foundation and will be available in a future update.</p></div></section>
+}
