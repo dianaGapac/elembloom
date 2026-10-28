@@ -1,2 +1,74 @@
-import { ComingSoon } from "@/components/coming-soon"
-export default function RiskAssessmentPage() { return <ComingSoon title="Risk Assessment" description="Identify pupils who may benefit from timely, focused support." /> }
+"use client"
+
+import { useMemo, useState } from "react"
+import Link from "next/link"
+import useSWR from "swr"
+import { AlertTriangle, CheckCircle2, Eye, Info, Search, ShieldAlert, X } from "lucide-react"
+import { createClient } from "@/lib/supabase/client"
+import { Button } from "@/components/ui/button"
+
+type ClassRecord = { id: string; grade_level: number; section_name: string; school_year: string }
+type Student = { id: string; class_id: string; student_number: string; first_name: string; last_name: string }
+type Attendance = { student_id: string; class_id: string; attendance_date: string; status: "present" | "absent" | "late" | "excused" }
+type Assessment = { id: string; class_id: string; title: string; school_year: string | null; grading_period: string; assessment_date: string; total_points: number; passing_percentage: number }
+type Score = { assessment_id: string; student_id: string; score: number | null }
+type Data = { classes: ClassRecord[]; students: Student[]; attendance: Attendance[]; assessments: Assessment[]; scores: Score[] }
+type Risk = { level: "high" | "moderate" | "low" | "incomplete"; label: string; average: number | null; failed: number; absences: number; assessed: string | null; factors: string[]; missing: string[] }
+
+const schoolYears = ["2024–2025", "2025–2026", "2026–2027", "2027–2028"]
+const periods = ["First Quarter", "Second Quarter", "Third Quarter", "Fourth Quarter"]
+
+async function fetchRiskData(): Promise<Data> {
+  const supabase = createClient()
+  const queries = await Promise.all([
+    supabase.from("classes").select("id, grade_level, section_name, school_year").eq("is_active", true),
+    supabase.from("students").select("id, class_id, student_number, first_name, last_name").eq("is_active", true),
+    supabase.from("attendance").select("student_id, class_id, attendance_date, status"),
+    supabase.from("assessments").select("id, class_id, title, grading_period, assessment_date, total_points, passing_percentage"),
+    supabase.from("assessment_scores").select("assessment_id, student_id, score"),
+  ])
+  for (const query of queries) if (query.error) throw new Error(query.error.message)
+  return { classes: queries[0].data ?? [], students: queries[1].data ?? [], attendance: queries[2].data ?? [], assessments: queries[3].data ?? [], scores: queries[4].data ?? [] }
+}
+
+function classify(student: Student, data: Data, schoolYear: string, period: string): Risk {
+  const cls = data.classes.find((item) => item.id === student.class_id)
+  const assessments = data.assessments.filter((item) => item.class_id === student.class_id && (!schoolYear || item.school_year === schoolYear || !item.school_year) && (!period || item.grading_period === period))
+  const scores = assessments.map((assessment) => ({ assessment, score: data.scores.find((item) => item.assessment_id === assessment.id && item.student_id === student.id) })).filter((item) => item.score?.score !== null && item.score?.score !== undefined)
+  const percentages = scores.map(({ assessment, score }) => Number(score!.score) / Number(assessment.total_points) * 100)
+  const absences = data.attendance.filter((item) => item.student_id === student.id && item.status === "absent" && (!schoolYear || item.attendance_date.startsWith(schoolYear.slice(0, 4)))).length
+  const failed = scores.filter(({ assessment, score }) => Number(score!.score) / Number(assessment.total_points) * 100 < Number(assessment.passing_percentage ?? 75)).length
+  const average = percentages.length ? percentages.reduce((sum, value) => sum + value, 0) / percentages.length : null
+  const missing: string[] = []; const factors: string[] = []
+  if (!assessments.length) missing.push("No assessments are available for this period.")
+  else if (scores.length < assessments.length) missing.push(`${assessments.length - scores.length} assessment score${assessments.length - scores.length === 1 ? " is" : "s are"} not recorded.`)
+  if (average !== null && average < 75) factors.push(`Assessment average is ${average.toFixed(1)}%.`)
+  if (failed) factors.push(`${failed} assessment${failed === 1 ? "" : "s"} below the passing mark.`)
+  if (absences) factors.push(`${absences} recorded absence${absences === 1 ? "" : "s"}.`)
+  if (!data.attendance.some((item) => item.student_id === student.id)) missing.push("Attendance has not been recorded.")
+  let level: Risk["level"] = "incomplete"
+  if (percentages.length) { const score = (average !== null && average < 75 ? 2 : 0) + (failed >= 2 ? 2 : failed === 1 ? 1 : 0) + (absences >= 5 ? 2 : absences >= 2 ? 1 : 0); level = score >= 4 ? "high" : score >= 2 ? "moderate" : "low" }
+  const labels = { high: "High risk", moderate: "Moderate risk", low: "Low risk", incomplete: "Incomplete" }
+  return { level, label: labels[level], average, failed, absences, assessed: scores.length ? scores.map(({ assessment }) => assessment.assessment_date).sort().at(-1) ?? null : null, factors, missing: level === "incomplete" ? missing : missing }
+}
+
+function badge(level: Risk["level"]) { return level === "high" ? "bg-destructive/10 text-destructive" : level === "moderate" ? "bg-amber-500/10 text-amber-700 dark:text-amber-300" : level === "low" ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground" }
+
+export default function RiskAssessmentPage() {
+  const { data, error, isLoading } = useSWR("risk-assessment", fetchRiskData)
+  const [search, setSearch] = useState(""); const [schoolYear, setSchoolYear] = useState(""); const [grade, setGrade] = useState(""); const [classId, setClassId] = useState(""); const [period, setPeriod] = useState(""); const [level, setLevel] = useState(""); const [selected, setSelected] = useState<Student | null>(null)
+  const classes = data?.classes ?? []; const students = data?.students ?? []
+  const rows = useMemo(() => students.map((student) => ({ student, risk: classify(student, data!, schoolYear, period) })).filter(({ student, risk }) => { const cls = classes.find((item) => item.id === student.class_id); const text = `${student.first_name} ${student.last_name} ${student.student_number}`.toLowerCase(); return text.includes(search.toLowerCase()) && (!schoolYear || cls?.school_year === schoolYear) && (!grade || String(cls?.grade_level) === grade) && (!classId || student.class_id === classId) && (!level || risk.level === level) }), [students, data, classes, search, schoolYear, grade, classId, period, level])
+  const summary = useMemo(() => students.map((student) => classify(student, data!, schoolYear, period)).reduce((counts, risk) => ({ ...counts, [risk.level]: counts[risk.level] + 1 }), { high: 0, moderate: 0, low: 0, incomplete: 0 }), [students, data, schoolYear, period])
+  const selectedRisk = selected && data ? classify(selected, data, schoolYear, period) : null
+  if (isLoading) return <section className="mx-auto max-w-7xl p-6"><p className="text-sm text-muted-foreground">Loading risk overview…</p></section>
+  if (error) return <section className="mx-auto max-w-7xl p-6"><div className="rounded-xl border border-destructive/30 bg-destructive/5 p-5"><h1 className="font-semibold">Unable to load risk assessment</h1><p className="mt-2 text-sm text-muted-foreground">{error.message}</p></div></section>
+  return <section className="mx-auto flex max-w-7xl flex-col gap-6 p-6 lg:p-8">
+    <div><p className="text-sm font-medium text-primary">Early support screening</p><h1 className="mt-1 text-3xl font-bold tracking-tight">Risk Assessment</h1><p className="mt-2 max-w-2xl text-muted-foreground">Identify pupils who may benefit from timely, focused support using available academic records.</p></div>
+    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{([["high", "High-risk pupils", AlertTriangle], ["moderate", "Moderate-risk pupils", ShieldAlert], ["low", "Low-risk pupils", CheckCircle2], ["incomplete", "Incomplete data", Info]] as const).map(([key, label, Icon]) => <div key={key} className="rounded-xl border bg-card p-5"><div className="flex items-center justify-between"><p className="text-sm text-muted-foreground">{label}</p><Icon className="text-muted-foreground" /></div><p className="mt-3 text-3xl font-bold">{summary[key]}</p></div>)}</div>
+    <div className="rounded-xl border bg-card p-4"><div className="flex flex-wrap gap-3"><label className="flex min-w-56 flex-1 items-center gap-2 rounded-lg border px-3 py-2 text-sm"><Search /><span className="sr-only">Search pupils</span><input className="min-w-0 flex-1 bg-transparent outline-none" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search pupil or student number" /></label><select aria-label="School year" value={schoolYear} onChange={(event) => setSchoolYear(event.target.value)} className="rounded-lg border bg-background px-3 py-2 text-sm"><option value="">All school years</option>{schoolYears.map((item) => <option key={item}>{item}</option>)}</select><select aria-label="Grade" value={grade} onChange={(event) => setGrade(event.target.value)} className="rounded-lg border bg-background px-3 py-2 text-sm"><option value="">All grades</option>{[...new Set(classes.map((item) => item.grade_level))].sort().map((item) => <option key={item}>{item}</option>)}</select><select aria-label="Section" value={classId} onChange={(event) => setClassId(event.target.value)} className="rounded-lg border bg-background px-3 py-2 text-sm"><option value="">All sections</option>{classes.map((item) => <option key={item.id} value={item.id}>{item.section_name}</option>)}</select><select aria-label="Grading period" value={period} onChange={(event) => setPeriod(event.target.value)} className="rounded-lg border bg-background px-3 py-2 text-sm"><option value="">All grading periods</option>{periods.map((item) => <option key={item}>{item}</option>)}</select><select aria-label="Risk level" value={level} onChange={(event) => setLevel(event.target.value)} className="rounded-lg border bg-background px-3 py-2 text-sm"><option value="">All risk levels</option><option value="high">High</option><option value="moderate">Moderate</option><option value="low">Low</option><option value="incomplete">Incomplete</option></select></div></div>
+    <div className="overflow-hidden rounded-xl border bg-card"><div className="border-b p-5"><h2 className="font-semibold">Pupil risk register</h2><p className="mt-1 text-sm text-muted-foreground">{rows.length} pupil{rows.length === 1 ? "" : "s"} shown</p></div>{rows.length === 0 ? <div className="p-12 text-center text-sm text-muted-foreground">No pupils match the selected filters.</div> : <div className="overflow-x-auto"><table className="w-full min-w-[920px] text-left text-sm"><thead className="bg-muted/40 text-xs text-muted-foreground"><tr><th className="px-5 py-3">Student number</th><th className="px-5 py-3">Pupil name</th><th className="px-5 py-3">Grade and section</th><th className="px-5 py-3">Attendance</th><th className="px-5 py-3">Performance</th><th className="px-5 py-3">Risk</th><th className="px-5 py-3">Last assessed</th><th className="px-5 py-3">Action</th></tr></thead><tbody className="divide-y">{rows.map(({ student, risk }) => { const cls = classes.find((item) => item.id === student.class_id); return <tr key={student.id}><td className="px-5 py-4 font-medium">{student.student_number}</td><td className="px-5 py-4">{student.last_name}, {student.first_name}</td><td className="px-5 py-4 text-muted-foreground">Grade {cls?.grade_level} · {cls?.section_name}</td><td className="px-5 py-4">{risk.absences ? `${risk.absences} absence${risk.absences === 1 ? "" : "s"}` : "No concerns"}</td><td className="px-5 py-4">{risk.average === null ? "Not enough data" : `${risk.average.toFixed(1)}% average`}</td><td className="px-5 py-4"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${badge(risk.level)}`}>{risk.label}</span></td><td className="px-5 py-4 text-muted-foreground">{risk.assessed ?? "Not assessed"}</td><td className="px-5 py-4"><Button variant="ghost" size="sm" onClick={() => setSelected(student)}><Eye data-icon="inline-start" />View details</Button></td></tr>})}</tbody></table></div>}</div>
+    <div className="flex gap-2 rounded-xl border bg-muted/30 p-4 text-sm text-muted-foreground"><Info /> <p>This rule-based classification is a screening aid for teacher review, not a diagnosis or definitive prediction. Missing records are never treated as zero.</p></div>
+    {selected && selectedRisk && <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/30 p-4" role="dialog" aria-modal="true" aria-labelledby="risk-details-title"><div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border bg-card p-6 shadow-xl"><div className="flex items-start justify-between"><div><p className="text-sm text-primary">Pupil risk details</p><h2 id="risk-details-title" className="mt-1 text-2xl font-semibold">{selected.last_name}, {selected.first_name}</h2><p className="mt-1 text-sm text-muted-foreground">{selected.student_number}</p></div><button onClick={() => setSelected(null)} aria-label="Close"><X /></button></div><div className="mt-6 flex items-center justify-between rounded-xl border p-4"><span className={`rounded-full px-3 py-1 text-sm font-semibold ${badge(selectedRisk.level)}`}>{selectedRisk.label}</span><span className="text-sm text-muted-foreground">Last assessed: {selectedRisk.assessed ?? "Not assessed"}</span></div><div className="mt-6 grid gap-4 sm:grid-cols-3"><div><p className="text-xs text-muted-foreground">Assessment average</p><p className="mt-1 text-xl font-semibold">{selectedRisk.average === null ? "Unavailable" : `${selectedRisk.average.toFixed(1)}%`}</p></div><div><p className="text-xs text-muted-foreground">Failed assessments</p><p className="mt-1 text-xl font-semibold">{selectedRisk.failed}</p></div><div><p className="text-xs text-muted-foreground">Recorded absences</p><p className="mt-1 text-xl font-semibold">{selectedRisk.absences}</p></div></div><div className="mt-6 grid gap-5 sm:grid-cols-2"><div><h3 className="font-semibold">Contributing factors</h3>{selectedRisk.factors.length ? <ul className="mt-2 list-disc space-y-2 pl-5 text-sm text-muted-foreground">{selectedRisk.factors.map((item) => <li key={item}>{item}</li>)}</ul> : <p className="mt-2 text-sm text-muted-foreground">No concerning factors measured.</p>}</div><div><h3 className="font-semibold">Unavailable information</h3>{selectedRisk.missing.length ? <ul className="mt-2 list-disc space-y-2 pl-5 text-sm text-muted-foreground">{selectedRisk.missing.map((item) => <li key={item}>{item}</li>)}</ul> : <p className="mt-2 text-sm text-muted-foreground">No known gaps for this view.</p>}</div></div><div className="mt-6 flex justify-end"><Button asChild variant="outline"><Link href={`/pupils/${selected.id}`}>Open pupil record</Link></Button></div></div></div>}
+  </section>
+}
