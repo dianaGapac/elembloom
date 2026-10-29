@@ -38,7 +38,7 @@ export default function InterventionsPage() {
   const [search, setSearch] = useState("")
   const [status, setStatus] = useState<"all" | Intervention["status"]>("all")
   const [googleStatus, setGoogleStatus] = useState("")
-  async function connectGoogle() { const supabase = createClient(); const { error: oauthError } = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: `${window.location.origin}/auth/callback`, scopes: "https://www.googleapis.com/auth/gmail.send", queryParams: { access_type: "offline", prompt: "consent" } } }); if (oauthError) setGoogleStatus(oauthError.message) }
+  function connectGoogle() { window.location.assign("/api/auth/google/start") }
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Intervention | null>(null)
   const [selected, setSelected] = useState<Intervention | null>(null)
