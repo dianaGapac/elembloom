@@ -24,21 +24,6 @@ async function fetchRoster(): Promise<Roster> {
   ])
   if (classError) throw classError
   if (studentError) throw studentError
-  if ((classes ?? []).length === 0) {
-    const { data: auth } = await supabase.auth.getUser()
-    if (auth.user) {
-      const { data: demoClass, error: demoClassError } = await supabase.from("classes").insert({ teacher_id: auth.user.id, grade_level: 4, section_name: "Sampaguita", school_year: "2026–2027", subject_name: "General Education", room: "Room 4" }).select("id, grade_level, section_name, school_year, is_active").single()
-      if (demoClassError) throw demoClassError
-      const demoStudents = [
-        { teacher_id: auth.user.id, class_id: demoClass.id, student_number: "2026-0001", first_name: "Ana", last_name: "Santos", parent_guardian_name: "Maria Santos", parent_guardian_email: "maria.santos@example.com", email_notifications_enabled: true },
-        { teacher_id: auth.user.id, class_id: demoClass.id, student_number: "2026-0002", first_name: "Ben", last_name: "Reyes", parent_guardian_name: "Joel Reyes", parent_guardian_email: "joel.reyes@example.com", email_notifications_enabled: true },
-        { teacher_id: auth.user.id, class_id: demoClass.id, student_number: "2026-0003", first_name: "Cara", last_name: "Dela Cruz", parent_guardian_name: "Liza Dela Cruz", parent_guardian_email: "liza.delacruz@example.com", email_notifications_enabled: true },
-      ]
-      const { data: seededStudents, error: seedError } = await supabase.from("students").insert(demoStudents).select("id, class_id, student_number, first_name, last_name, parent_guardian_name, parent_guardian_email, email_notifications_enabled, is_active")
-      if (seedError) throw seedError
-      return { classes: [demoClass], students: seededStudents ?? [] }
-    }
-  }
   return { classes: classes ?? [], students: students ?? [] }
 }
 

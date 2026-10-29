@@ -17,7 +17,7 @@ export default function LoginPage() {
     event.preventDefault(); setError(""); setLoading(true)
     const { error: signInError } = await createClient().auth.signInWithPassword({ email: email.trim(), password })
     if (signInError) setError(signInError.message.toLowerCase().includes("confirm") ? "Please confirm your email before signing in." : "Invalid email or password.")
-    else window.location.assign("/dashboard")
+    else window.location.assign(new URLSearchParams(window.location.search).get("next") || "/dashboard")
     setLoading(false)
   }
 

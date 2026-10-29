@@ -77,7 +77,7 @@ export default function ProfilePage() {
     const teacherId = user.id
     const payload = { grade_level: classEditor.grade_level, section_name: classEditor.section_name.trim(), school_year: classEditor.school_year, subject_name: classEditor.subject_name?.trim() || null, room: classEditor.room?.trim() || null, teacher_id: teacherId, is_active: true }
     const result = classEditor.id
-      ? await supabase.from("classes").update(payload).eq("id", classEditor.id).eq("teacher_id", teacherId).select("id").single()
+      ? await supabase.from("classes").update(payload).eq("id", classEditor.id).eq("teacher_id", teacherId).select("id").maybeSingle()
       : await supabase.from("classes").insert(payload).select("id").single()
     if (result.error || !result.data) {
       setError(result.error?.code === "23505" ? "You already have this grade, section, and school year." : result.error?.message ?? "Unable to save class.")
@@ -107,7 +107,14 @@ export default function ProfilePage() {
     setSaving(false)
     await loadData()
   }
-  async function deleteClass(item: ClassItem) { if (!window.confirm(`Archive Grade ${item.grade_level} – ${item.section_name}? Existing academic history will be preserved.`)) return; setSaving(true); await supabase.from("classes").update({ is_active: false }).eq("id", item.id); setSaving(false); setMessage("Class archived."); loadData() }
+  async function deleteClass(item: ClassItem) {
+    if (!window.confirm(`Archive Grade ${item.grade_level} – ${item.section_name}? Existing academic history will be preserved.`)) return
+    setSaving(true); setError(""); setMessage("")
+    const { data, error: archiveError } = await supabase.from("classes").update({ is_active: false }).eq("id", item.id).eq("teacher_id", profile?.id).select("id").maybeSingle()
+    if (archiveError || !data) setError(archiveError?.message ?? "The class could not be archived. Refresh and try again.")
+    else { setMessage("Class archived."); await loadData() }
+    setSaving(false)
+  }
 
   if (loading) return <PageLoading message="Loading your profile…" />
   if (!profile) return <PageLoading message="Please sign in to view your profile." />
