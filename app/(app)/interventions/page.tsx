@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from "react"
 import { CalendarDays, CheckCircle2, ClipboardList, Mail, Plus, Save, Target } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { createClient } from "@/lib/supabase/client"
 
 type Student = { id: string; first_name: string; last_name: string; student_number: string; parent_guardian_email?: string | null }
@@ -52,7 +51,7 @@ export default function InterventionsPage() {
     if (!studentId && studentData?.[0]) setStudentId(studentData[0].id)
     setLoading(false)
   }
-  useEffect(() => { void loadData() }, [])
+  useEffect(() => { const queryStudent = new URLSearchParams(window.location.search).get("student"); void loadData().then(() => { if (queryStudent) setStudentId(queryStudent) }) }, [])
   useEffect(() => { if (studentId && !plans.some((plan) => plan.id === planId && plan.student_id === studentId)) setPlanId(plans.find((plan) => plan.student_id === studentId)?.id ?? "") }, [studentId, plans, planId])
   useEffect(() => { if (selectedPlan) setPlanForm({ title: selectedPlan.title, owner_name: selectedPlan.owner_name ?? "", start_date: selectedPlan.start_date, target_date: selectedPlan.target_date ?? "", goal: selectedPlan.goal, baseline: selectedPlan.baseline ?? "", target_performance: selectedPlan.target_performance ?? "", success_criteria: selectedPlan.success_criteria ?? "", risk_level: selectedPlan.risk_level, risk_factors: selectedPlan.risk_factors.join("\n") }) }, [planId])
 
