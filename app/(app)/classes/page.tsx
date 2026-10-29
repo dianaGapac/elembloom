@@ -22,14 +22,15 @@ export default function ClassesPage() {
   const [error, setError] = useState("")
 
   async function loadClasses() {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
+    setLoading(true); setError("")
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) { setError(authError?.message ?? "Your session has expired. Sign in again to manage classes."); setLoading(false); return }
     const { data, error: loadError } = await supabase.from("classes").select("id,grade_level,section_name,school_year,subject_name,room").eq("teacher_id", user.id).eq("is_active", true).order("grade_level").order("section_name")
-    if (loadError) setError(loadError.message)
+    if (loadError) setError(`Could not load classes: ${loadError.message}`)
     else setClasses(data ?? [])
     setLoading(false)
   }
-  useEffect(() => { loadClasses() }, [])
+  useEffect(() => { void loadClasses() }, [])
   function startCreate() { setEditingId(null); setForm(blank); setMessage(""); setError(""); setOpen(true) }
   function startEdit(item: ClassItem) { setEditingId(item.id); setForm({ grade_level: item.grade_level, section_name: item.section_name, school_year: item.school_year, subject_name: item.subject_name ?? "", room: item.room ?? "" }); setMessage(""); setError(""); setOpen(true) }
   async function saveClass(event: React.FormEvent) {
@@ -43,9 +44,23 @@ export default function ClassesPage() {
     if (duplicate.error) { setError(duplicate.error.message); setSaving(false); return }
     if (duplicate.data) { setError("You already have an active class with these details."); setSaving(false); return }
     const values = { teacher_id: user.id, grade_level: form.grade_level, section_name: section, school_year: form.school_year, subject_name: form.subject_name.trim() || null, room: form.room.trim() || null, is_active: true }
-    const result = editingId ? await supabase.from("classes").update(values).eq("id", editingId).eq("teacher_id", user.id).select("id").maybeSingle() : await supabase.from("classes").insert(values).select("id").single()
-    if (result.error || !result.data) setError(result.error?.message ?? "The class could not be saved. Refresh and try again.")
-    else { setOpen(false); setMessage(editingId ? "Class updated successfully." : "Class added successfully."); await loadClasses() }
+    const result = editingId
+      ? await supabase.from("classes").update(values).eq("id", editingId).eq("teacher_id", user.id)
+      : await supabase.from("classes").insert(values)
+    if (result.error) {
+      setError(`Could not save class: ${result.error.message}`)
+      setSaving(false)
+      return
+    }
+    const verify = editingId
+      ? await supabase.from("classes").select("id").eq("id", editingId).eq("teacher_id", user.id).maybeSingle()
+      : await supabase.from("classes").select("id").eq("teacher_id", user.id).eq("grade_level", form.grade_level).eq("section_name", section).eq("school_year", form.school_year).eq("is_active", true).order("created_at", { ascending: false }).limit(1).maybeSingle()
+    if (verify.error || !verify.data) {
+      setError(`Supabase did not confirm the save: ${verify.error?.message ?? "the saved row was not returned"}`)
+      setSaving(false)
+      return
+    }
+    setOpen(false); setMessage(editingId ? "Class updated successfully." : "Class added successfully."); await loadClasses()
     setSaving(false)
   }
   async function archive(item: ClassItem) {
