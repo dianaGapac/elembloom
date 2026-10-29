@@ -12,7 +12,8 @@ type Student = { id: string; class_id: string; student_number: string; first_nam
 type Attendance = { student_id: string; class_id: string; attendance_date: string; status: "present" | "absent" | "late" | "excused" }
 type Assessment = { id: string; class_id: string; title: string; school_year: string | null; grading_period: string; assessment_date: string; total_points: number; passing_percentage: number }
 type Score = { assessment_id: string; student_id: string; score: number | null }
-type Data = { classes: ClassRecord[]; students: Student[]; attendance: Attendance[]; assessments: Assessment[]; scores: Score[] }
+type RiskSettings = { low_assessment_threshold: number; repeated_failed_assessments: number; attendance_concern_absences: number; moderate_risk_score: number; high_risk_score: number }
+type Data = { classes: ClassRecord[]; students: Student[]; attendance: Attendance[]; assessments: Assessment[]; scores: Score[]; settings: RiskSettings }
 type Risk = { level: "high" | "moderate" | "low" | "incomplete"; label: string; average: number | null; failed: number; absences: number; assessed: string | null; factors: string[]; missing: string[] }
 
 const schoolYears = ["2024–2025", "2025–2026", "2026–2027", "2027–2028"]
@@ -26,9 +27,12 @@ async function fetchRiskData(): Promise<Data> {
     supabase.from("attendance").select("student_id, class_id, attendance_date, status"),
     supabase.from("assessments").select("id, class_id, title, school_year, grading_period, assessment_date, total_points, passing_percentage"),
     supabase.from("assessment_scores").select("assessment_id, student_id, score"),
+    supabase.from("grading_settings").select("risk_thresholds").eq("school_year", "2026–2027").is("grade_level", null).eq("subject_name", "").maybeSingle(),
   ])
   for (const query of queries) if (query.error) throw new Error(query.error.message)
-  return { classes: queries[0].data ?? [], students: queries[1].data ?? [], attendance: queries[2].data ?? [], assessments: queries[3].data ?? [], scores: queries[4].data ?? [] }
+  const configured = queries[5].data?.risk_thresholds as Partial<RiskSettings> | null
+  const settings = { low_assessment_threshold: configured?.low_assessment_threshold ?? 75, repeated_failed_assessments: configured?.repeated_failed_assessments ?? 2, attendance_concern_absences: configured?.attendance_concern_absences ?? 5, moderate_risk_score: configured?.moderate_risk_score ?? 2, high_risk_score: configured?.high_risk_score ?? 4 }
+  return { classes: queries[0].data ?? [], students: queries[1].data ?? [], attendance: queries[2].data ?? [], assessments: queries[3].data ?? [], scores: queries[4].data ?? [], settings }
 }
 
 function classify(student: Student, data: Data, schoolYear: string, period: string): Risk {
@@ -42,12 +46,12 @@ function classify(student: Student, data: Data, schoolYear: string, period: stri
   const missing: string[] = []; const factors: string[] = []
   if (!assessments.length) missing.push("No assessments are available for this period.")
   else if (scores.length < assessments.length) missing.push(`${assessments.length - scores.length} assessment score${assessments.length - scores.length === 1 ? " is" : "s are"} not recorded.`)
-  if (average !== null && average < 75) factors.push(`Assessment average is ${average.toFixed(1)}%.`)
+  if (average !== null && average < data.settings.low_assessment_threshold) factors.push(`Assessment average is ${average.toFixed(1)}%, below the ${data.settings.low_assessment_threshold}% threshold.`)
   if (failed) factors.push(`${failed} assessment${failed === 1 ? "" : "s"} below the passing mark.`)
   if (absences) factors.push(`${absences} recorded absence${absences === 1 ? "" : "s"}.`)
   if (!data.attendance.some((item) => item.student_id === student.id)) missing.push("Attendance has not been recorded.")
   let level: Risk["level"] = "incomplete"
-  if (percentages.length) { const score = (average !== null && average < 75 ? 2 : 0) + (failed >= 2 ? 2 : failed === 1 ? 1 : 0) + (absences >= 5 ? 2 : absences >= 2 ? 1 : 0); level = score >= 4 ? "high" : score >= 2 ? "moderate" : "low" }
+  if (percentages.length) { const score = (average !== null && average < data.settings.low_assessment_threshold ? 2 : 0) + (failed >= data.settings.repeated_failed_assessments ? 2 : failed > 0 ? 1 : 0) + (absences >= data.settings.attendance_concern_absences ? 2 : absences >= Math.max(1, Math.ceil(data.settings.attendance_concern_absences / 2)) ? 1 : 0); level = score >= data.settings.high_risk_score ? "high" : score >= data.settings.moderate_risk_score ? "moderate" : "low" }
   const labels = { high: "High risk", moderate: "Moderate risk", low: "Low risk", incomplete: "Incomplete" }
   return { level, label: labels[level], average, failed, absences, assessed: scores.length ? scores.map(({ assessment }) => assessment.assessment_date).sort().at(-1) ?? null : null, factors, missing: level === "incomplete" ? missing : missing }
 }
