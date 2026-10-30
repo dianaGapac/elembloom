@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import useSWR from "swr"
 import Link from "next/link"
 import { AlertCircle, CalendarDays, CheckCircle2, ClipboardCheck, Clock3, FileText, HeartPulse, Loader2, Save, Users } from "lucide-react"
@@ -39,6 +39,8 @@ async function fetchDashboard(): Promise<Data> {
 function interventionDate(date: string | null) { return date ? new Date(`${date}T00:00:00+08:00`) : null }
 
 export default function DashboardPage() {
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => setMounted(true), [])
   const { data, error, isLoading, mutate } = useSWR("teacher-dashboard", fetchDashboard)
   const [selectedClass, setSelectedClass] = useState("")
   const [attendanceDate, setAttendanceDate] = useState(todayInManila)
@@ -82,7 +84,7 @@ export default function DashboardPage() {
     setSavingAttendance(false)
   }
 
-  if (isLoading) return <section className="mx-auto max-w-7xl p-6"><p className="text-sm text-muted-foreground">Loading your dashboard…</p></section>
+  if (!mounted || isLoading) return <section className="mx-auto max-w-7xl p-6"><p className="text-sm text-muted-foreground">Loading your dashboard…</p></section>
   if (error) return <section className="mx-auto max-w-7xl p-6"><div className="rounded-xl border border-destructive/30 bg-destructive/5 p-5"><h1 className="font-semibold">Unable to load dashboard</h1><p className="mt-2 text-sm text-muted-foreground">{error.message}</p></div></section>
 
   const today = todayInManila()
