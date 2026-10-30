@@ -8,7 +8,7 @@ import { classifyRisk } from "@/lib/risk-engine"
 import { createClient } from "@/lib/supabase/client"
 
 type Student = { id: string; class_id: string; first_name: string; last_name: string; student_number: string; parent_guardian_email?: string | null }
-type ClassRecord = { id: string; grade_level: number; section_name: string; subject_name: string | null }
+type ClassRecord = { id: string; grade_level: number; section_name: string; school_year: string; subject_name: string | null }
 type Assessment = { id: string; class_id: string; subject: string; assessment_date: string; total_points: number; passing_percentage: number }
 type Score = { assessment_id: string; student_id: string; score: number | null; updated_at?: string }
 type Attendance = { student_id: string; class_id: string; attendance_date: string; status: "present" | "absent" | "late" | "excused" }
@@ -75,10 +75,10 @@ export default function InterventionsPage() {
     setLoading(true); setError("")
     const [{ data: studentData, error: studentError }, { data: classData, error: classError }, { data: assessmentData, error: assessmentError }, { data: scoreData, error: scoreError }, { data: attendanceData, error: attendanceError }, { data: planData, error: planError }, { data: objectiveData, error: objectiveError }, { data: sessionData, error: sessionError }] = await Promise.all([
       supabase.from("students").select("id,class_id,first_name,last_name,student_number,parent_guardian_email").eq("is_active", true).order("last_name"),
-      supabase.from("classes").select("id,grade_level,section_name,subject_name").eq("is_active", true),
+      supabase.from("classes").select("id,grade_level,section_name,school_year,subject_name").eq("is_active", true),
       supabase.from("assessments").select("id,class_id,subject,assessment_date,total_points,passing_percentage"),
-      supabase.from("assessment_scores").select("assessment_id,student_id,score"),
-      supabase.from("attendance").select("student_id,status"),
+      supabase.from("assessment_scores").select("assessment_id,student_id,score,updated_at").order("updated_at", { ascending: true }),
+      supabase.from("attendance").select("student_id,class_id,attendance_date,status"),
       supabase.from("intervention_plans").select("id,student_id,title,owner_name,start_date,target_date,goal,baseline,target_performance,success_criteria,status,risk_level,risk_factors").order("updated_at", { ascending: false }),
       supabase.from("intervention_objectives").select("id,plan_id,concern,objective,strategy,resources,frequency,duration_minutes,assigned_teacher,expected_outcome,measurement_method,baseline,target,status").order("created_at"),
       supabase.from("intervention_sessions").select("id,plan_id,session_number,scheduled_date,start_time,end_time,activity,status").order("scheduled_date")
