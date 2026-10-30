@@ -6,15 +6,11 @@ import useSWR from "swr"
 import { AlertTriangle, CheckCircle2, Eye, Info, Search, ShieldAlert, X } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
+import { classifyRisk, type RiskAssessment, type RiskAttendance, type RiskClass, type RiskClassRecord, type RiskScore, type RiskStudent, type RiskThresholds } from "@/lib/risk-engine"
 
-type ClassRecord = { id: string; grade_level: number; section_name: string; school_year: string }
-type Student = { id: string; class_id: string; student_number: string; first_name: string; last_name: string; parent_guardian_email: string | null; email_notifications_enabled: boolean }
-type Attendance = { student_id: string; class_id: string; attendance_date: string; status: "present" | "absent" | "late" | "excused" }
-type Assessment = { id: string; class_id: string; title: string; school_year: string | null; grading_period: string; assessment_date: string; total_points: number; passing_percentage: number }
-type Score = { assessment_id: string; student_id: string; score: number | null }
-type RiskSettings = { low_assessment_threshold: number; repeated_failed_assessments: number; attendance_concern_absences: number; moderate_risk_score: number; high_risk_score: number }
-type Data = { classes: ClassRecord[]; students: Student[]; attendance: Attendance[]; assessments: Assessment[]; scores: Score[]; settings: RiskSettings }
-type Risk = { level: "high" | "moderate" | "low" | "incomplete"; label: string; average: number | null; failed: number; absences: number; assessed: string | null; factors: string[]; missing: string[] }
+type Student = RiskStudent & { student_number: string; first_name: string; last_name: string; parent_guardian_email: string | null; email_notifications_enabled: boolean }
+type Data = { classes: RiskClassRecord[]; students: Student[]; attendance: RiskAttendance[]; assessments: (RiskAssessment & { title: string; school_year: string | null; grading_period: string })[]; scores: (RiskScore & { updated_at?: string })[]; settings: RiskThresholds }
+type Risk = RiskClass
 
 const schoolYears = ["2024–2025", "2025–2026", "2026–2027", "2027–2028"]
 const periods = ["First Quarter", "Second Quarter", "Third Quarter", "Fourth Quarter"]
@@ -22,38 +18,18 @@ const periods = ["First Quarter", "Second Quarter", "Third Quarter", "Fourth Qua
 async function fetchRiskData(): Promise<Data> {
   const supabase = createClient()
   const queries = await Promise.all([
-    supabase.from("classes").select("id, grade_level, section_name, school_year").eq("is_active", true),
+    supabase.from("classes").select("id, grade_level, section_name, school_year, subject_name").eq("is_active", true),
     supabase.from("students").select("id, class_id, student_number, first_name, last_name, parent_guardian_email, email_notifications_enabled").eq("is_active", true),
     supabase.from("attendance").select("student_id, class_id, attendance_date, status"),
-    supabase.from("assessments").select("id, class_id, title, school_year, grading_period, assessment_date, total_points, passing_percentage"),
-    supabase.from("assessment_scores").select("assessment_id, student_id, score"),
-    supabase.from("grading_settings").select("risk_thresholds").eq("school_year", "2026–2027").is("grade_level", null).eq("subject_name", "").maybeSingle(),
+    supabase.from("assessments").select("id, class_id, title, subject, school_year, grading_period, assessment_date, total_points, passing_percentage"),
+    supabase.from("assessment_scores").select("assessment_id, student_id, score, updated_at").order("updated_at", { ascending: true }),
+    supabase.from("grading_settings").select("risk_thresholds,grade_level,subject_name,school_year").eq("school_year", "2026–2027"),
   ])
   for (const query of queries) if (query.error) throw new Error(query.error.message)
-  const configured = queries[5].data?.risk_thresholds as Partial<RiskSettings> | null
-  const settings = { low_assessment_threshold: configured?.low_assessment_threshold ?? 75, repeated_failed_assessments: configured?.repeated_failed_assessments ?? 2, attendance_concern_absences: configured?.attendance_concern_absences ?? 5, moderate_risk_score: configured?.moderate_risk_score ?? 2, high_risk_score: configured?.high_risk_score ?? 4 }
+  const settingsRows = (queries[5].data ?? []) as Array<{ risk_thresholds: Partial<RiskThresholds> | null; grade_level: number | null; subject_name: string | null }>
+  const configured = settingsRows.find((row) => row.grade_level === null && (row.subject_name ?? "") === "")?.risk_thresholds ?? settingsRows[0]?.risk_thresholds ?? {}
+  const settings: RiskThresholds = { low_assessment_threshold: configured.low_assessment_threshold ?? 75, repeated_failed_assessments: configured.repeated_failed_assessments ?? 2, attendance_concern_absences: configured.attendance_concern_absences ?? 5, moderate_risk_score: configured.moderate_risk_score ?? 2, high_risk_score: configured.high_risk_score ?? 4, attendance_rate_concern: configured.attendance_rate_concern, repeated_lateness: configured.repeated_lateness, declining_assessments: configured.declining_assessments, severe_low_assessment_threshold: configured.severe_low_assessment_threshold }
   return { classes: queries[0].data ?? [], students: queries[1].data ?? [], attendance: queries[2].data ?? [], assessments: queries[3].data ?? [], scores: queries[4].data ?? [], settings }
-}
-
-function classify(student: Student, data: Data, schoolYear: string, period: string): Risk {
-  const cls = data.classes.find((item) => item.id === student.class_id)
-  const assessments = data.assessments.filter((item) => item.class_id === student.class_id && (!schoolYear || item.school_year === schoolYear || !item.school_year) && (!period || item.grading_period === period))
-  const scores = assessments.map((assessment) => ({ assessment, score: data.scores.find((item) => item.assessment_id === assessment.id && item.student_id === student.id) })).filter((item) => item.score?.score !== null && item.score?.score !== undefined)
-  const percentages = scores.map(({ assessment, score }) => Number(score!.score) / Number(assessment.total_points) * 100)
-  const absences = data.attendance.filter((item) => item.student_id === student.id && item.status === "absent" && (!schoolYear || item.attendance_date.startsWith(schoolYear.slice(0, 4)))).length
-  const failed = scores.filter(({ assessment, score }) => Number(score!.score) / Number(assessment.total_points) * 100 < Number(assessment.passing_percentage ?? 75)).length
-  const average = percentages.length ? percentages.reduce((sum, value) => sum + value, 0) / percentages.length : null
-  const missing: string[] = []; const factors: string[] = []
-  if (!assessments.length) missing.push("No assessments are available for this period.")
-  else if (scores.length < assessments.length) missing.push(`${assessments.length - scores.length} assessment score${assessments.length - scores.length === 1 ? " is" : "s are"} not recorded.`)
-  if (average !== null && average < data.settings.low_assessment_threshold) factors.push(`Assessment average is ${average.toFixed(1)}%, below the ${data.settings.low_assessment_threshold}% threshold.`)
-  if (failed) factors.push(`${failed} assessment${failed === 1 ? "" : "s"} below the passing mark.`)
-  if (absences) factors.push(`${absences} recorded absence${absences === 1 ? "" : "s"}.`)
-  if (!data.attendance.some((item) => item.student_id === student.id)) missing.push("Attendance has not been recorded.")
-  let level: Risk["level"] = "incomplete"
-  if (percentages.length) { const score = (average !== null && average < data.settings.low_assessment_threshold ? 2 : 0) + (failed >= data.settings.repeated_failed_assessments ? 2 : failed > 0 ? 1 : 0) + (absences >= data.settings.attendance_concern_absences ? 2 : absences >= Math.max(1, Math.ceil(data.settings.attendance_concern_absences / 2)) ? 1 : 0); level = score >= data.settings.high_risk_score ? "high" : score >= data.settings.moderate_risk_score ? "moderate" : "low" }
-  const labels = { high: "High risk", moderate: "Moderate risk", low: "Low risk", incomplete: "Incomplete" }
-  return { level, label: labels[level], average, failed, absences, assessed: scores.length ? scores.map(({ assessment }) => assessment.assessment_date).sort().at(-1) ?? null : null, factors, missing: level === "incomplete" ? missing : missing }
 }
 
 function badge(level: Risk["level"]) { return level === "high" ? "bg-destructive/10 text-destructive" : level === "moderate" ? "bg-amber-500/10 text-amber-700 dark:text-amber-300" : level === "low" ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground" }
@@ -68,9 +44,9 @@ export default function RiskAssessmentPage() {
   async function createFollowUp() { if (!selected || !selectedRisk) return; setFollowUpSaving(true); setFollowUpStatus(""); const supabase = createClient(); const { data: auth } = await supabase.auth.getUser(); if (!auth.user) { setFollowUpStatus("Your session has expired. Please sign in again."); setFollowUpSaving(false); return } const result = await supabase.from("interventions").insert({ teacher_id: auth.user.id, student_id: selected.id, concern: `Risk follow-up: ${selectedRisk.label}`, intervention_type: "Targeted support", description: selectedRisk.factors.join(" ") || "Review academic and attendance records with the pupil.", expected_outcome: "Improved attendance, assessment completion, and performance.", start_date: new Date().toISOString().slice(0, 10), target_review_date: new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10), status: "planned", teacher_notes: followUpMessage.trim() || null }); if (result.error) setFollowUpStatus(result.error.message); else { setFollowUpStatus("Follow-up plan created. Review it in Interventions."); setFollowUpMessage("") } setFollowUpSaving(false) }
   const classes = data?.classes ?? []; const students = data?.students ?? []
   useEffect(() => { setSelectedIds([]) }, [search, schoolYear, grade, classId, period, level])
-  const rows = useMemo(() => students.map((student) => ({ student, risk: classify(student, data!, schoolYear, period) })).filter(({ student, risk }) => { const cls = classes.find((item) => item.id === student.class_id); const text = `${student.first_name} ${student.last_name} ${student.student_number}`.toLowerCase(); return text.includes(search.toLowerCase()) && (!schoolYear || cls?.school_year === schoolYear) && (!grade || String(cls?.grade_level) === grade) && (!classId || student.class_id === classId) && (!level || risk.level === level) }), [students, data, classes, search, schoolYear, grade, classId, period, level])
-  const summary = useMemo(() => students.map((student) => classify(student, data!, schoolYear, period)).reduce((counts, risk) => ({ ...counts, [risk.level]: counts[risk.level] + 1 }), { high: 0, moderate: 0, low: 0, incomplete: 0 }), [students, data, schoolYear, period])
-  const selectedRisk = selected && data ? classify(selected, data, schoolYear, period) : null
+  const rows = useMemo(() => students.map((student) => ({ student, risk: classifyRisk(student, data!, schoolYear, period) })).filter(({ student, risk }) => { const cls = classes.find((item) => item.id === student.class_id); const text = `${student.first_name} ${student.last_name} ${student.student_number}`.toLowerCase(); return text.includes(search.toLowerCase()) && (!schoolYear || cls?.school_year === schoolYear) && (!grade || String(cls?.grade_level) === grade) && (!classId || student.class_id === classId) && (!level || risk.level === level) }), [students, data, classes, search, schoolYear, grade, classId, period, level])
+  const summary = useMemo(() => students.map((student) => classifyRisk(student, data!, schoolYear, period)).reduce((counts, risk) => ({ ...counts, [risk.level]: counts[risk.level] + 1 }), { high: 0, moderate: 0, low: 0, incomplete: 0 }), [students, data, schoolYear, period])
+  const selectedRisk = selected && data ? classifyRisk(selected, data, schoolYear, period) : null
   if (isLoading) return <section className="mx-auto max-w-7xl p-6"><p className="text-sm text-muted-foreground">Loading risk overview…</p></section>
   if (error) return <section className="mx-auto max-w-7xl p-6"><div className="rounded-xl border border-destructive/30 bg-destructive/5 p-5"><h1 className="font-semibold">Unable to load risk assessment</h1><p className="mt-2 text-sm text-muted-foreground">{error.message}</p></div></section>
   return <section className="mx-auto flex max-w-7xl flex-col gap-6 p-6 lg:p-8">

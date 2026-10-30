@@ -4,13 +4,14 @@ import { useEffect, useMemo, useState, type ChangeEvent } from "react"
 import Link from "next/link"
 import { CalendarDays, CheckCircle2, ClipboardList, Mail, Plus, Save, Target, Users, CalendarClock, BellRing, ShieldAlert } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { classifyRisk } from "@/lib/risk-engine"
 import { createClient } from "@/lib/supabase/client"
 
 type Student = { id: string; class_id: string; first_name: string; last_name: string; student_number: string; parent_guardian_email?: string | null }
 type ClassRecord = { id: string; grade_level: number; section_name: string; subject_name: string | null }
-type Assessment = { id: string; class_id: string; assessment_date: string; total_points: number; passing_percentage: number | null }
-type Score = { assessment_id: string; student_id: string; score: number | null }
-type Attendance = { student_id: string; status: string }
+type Assessment = { id: string; class_id: string; subject: string; assessment_date: string; total_points: number; passing_percentage: number }
+type Score = { assessment_id: string; student_id: string; score: number | null; updated_at?: string }
+type Attendance = { student_id: string; class_id: string; attendance_date: string; status: "present" | "absent" | "late" | "excused" }
 type Plan = { id: string; student_id: string; title: string; owner_name: string | null; start_date: string; target_date: string | null; goal: string; baseline: string | null; target_performance: string | null; success_criteria: string | null; status: string; risk_level: string; risk_factors: string[] }
 type Objective = { id: string; plan_id: string; concern: string; objective: string; strategy: string; resources: string | null; frequency: string | null; duration_minutes: number | null; assigned_teacher: string | null; expected_outcome: string | null; measurement_method: string | null; baseline: string | null; target: string | null; status: string }
 type Session = { id: string; plan_id: string; session_number: number; scheduled_date: string; start_time: string | null; end_time: string | null; activity: string; status: string }
@@ -65,7 +66,7 @@ export default function InterventionsPage() {
   const planTotalPages = Math.max(1, Math.ceil(filteredPlans.length / planPageSize))
   const planTeachers = Array.from(new Set(plans.map((plan) => plan.owner_name || "Unassigned")))
   const resetPlanFilters = () => { setPlanSearch(""); setPlanRisk("all"); setPlanStatus("all"); setPlanTeacher("all"); setPlanPage(1) }
-  const riskRows = students.map((student) => { const studentAssessments = assessments.filter((item) => item.class_id === student.class_id); const studentScores = studentAssessments.map((assessment) => ({ assessment, score: scores.find((item) => item.assessment_id === assessment.id && item.student_id === student.id)?.score })).filter((item) => item.score !== null && item.score !== undefined); const average = studentScores.length ? studentScores.reduce((sum, item) => sum + (Number(item.score) / Number(item.assessment.total_points)) * 100, 0) / studentScores.length : null; const failed = studentScores.filter((item) => (Number(item.score) / Number(item.assessment.total_points)) * 100 < Number(item.assessment.passing_percentage ?? 75)).length; const absences = attendance.filter((item) => item.student_id === student.id && item.status === "absent").length; const level = average === null ? "incomplete" : average < 60 || failed >= 2 || absences >= 5 ? "high" : average < 75 || failed > 0 || absences >= 3 ? "moderate" : "low"; const activeGap = plans.some((plan) => plan.student_id === student.id && plan.status === "active"); const cls = classes.find((item) => item.id === student.class_id); return { student, cls, level, average, latest: studentScores.map((item) => item.assessment.assessment_date).sort().at(-1) ?? null, activeGap } }).filter((row) => ["moderate", "high"].includes(row.level) && !row.activeGap)
+  const riskRows = students.map((student) => { const risk = classifyRisk(student, { classes, assessments, scores, attendance, settings: { low_assessment_threshold: 75, repeated_failed_assessments: 2, attendance_concern_absences: 5, moderate_risk_score: 2, high_risk_score: 4 } }); const activeGap = plans.some((plan) => plan.student_id === student.id && plan.status === "active"); const cls = classes.find((item) => item.id === student.class_id); return { student, cls, level: risk.level, average: risk.average, latest: risk.assessed, activeGap } }).filter((row) => ["moderate", "high"].includes(row.level) && !row.activeGap)
   const activePlans = plans.filter((plan) => plan.status === "active")
   const upcomingSessions = sessions.filter((session) => { const date = new Date(`${session.scheduled_date}T00:00:00`); const now = new Date(); return session.status !== "completed" && date >= new Date(now.toDateString()) && date <= new Date(Date.now() + 7 * 86400000) }).length
   const pendingUpdates = sessionReports.filter((report) => report.parent_update_pending).length
@@ -75,7 +76,7 @@ export default function InterventionsPage() {
     const [{ data: studentData, error: studentError }, { data: classData, error: classError }, { data: assessmentData, error: assessmentError }, { data: scoreData, error: scoreError }, { data: attendanceData, error: attendanceError }, { data: planData, error: planError }, { data: objectiveData, error: objectiveError }, { data: sessionData, error: sessionError }] = await Promise.all([
       supabase.from("students").select("id,class_id,first_name,last_name,student_number,parent_guardian_email").eq("is_active", true).order("last_name"),
       supabase.from("classes").select("id,grade_level,section_name,subject_name").eq("is_active", true),
-      supabase.from("assessments").select("id,class_id,assessment_date,total_points,passing_percentage"),
+      supabase.from("assessments").select("id,class_id,subject,assessment_date,total_points,passing_percentage"),
       supabase.from("assessment_scores").select("assessment_id,student_id,score"),
       supabase.from("attendance").select("student_id,status"),
       supabase.from("intervention_plans").select("id,student_id,title,owner_name,start_date,target_date,goal,baseline,target_performance,success_criteria,status,risk_level,risk_factors").order("updated_at", { ascending: false }),
