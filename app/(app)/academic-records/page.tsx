@@ -11,7 +11,7 @@ type ClassRecord = { id: string; grade_level: number; section_name: string; scho
 type Student = { id: string; class_id: string; student_number: string; first_name: string; last_name: string }
 type Assessment = { id: string; class_id: string; title: string; assessment_type: string; subject: string; school_year: string | null; grading_period: string; assessment_date: string; total_points: number; passing_percentage: number }
 type Score = { id?: string; assessment_id: string; student_id: string; score: number | null; remarks: string | null }
-type RecordsData = { classes: ClassRecord[]; students: Student[]; assessments: Assessment[]; scores: Score[]; gradingSettings: { passing_grade: number; decimal_places: number; rounding_method: "half_up" | "floor" | "ceil"; grading_weights: Record<string, number> } | null }
+type RecordsData = { classes: ClassRecord[]; students: Student[]; assessments: Assessment[]; scores: Score[]; gradingSettings: { passing_grade: number; decimal_places: number; rounding_method: "half_up" | "floor" | "ceil"; grading_weights: Record<string, number> } | null; classSubjects: { id: string; class_id: string; subject_name: string }[]; gradingConfigurations: { class_subject_id: string; school_year: string; grading_period: string; written_work_weight: number; performance_tasks_weight: number; quarterly_exam_weight: number; passing_grade: number; decimal_places: number; rounding_method: "half_up" | "floor" | "ceil" }[] }
 
 const assessmentTypes = ["Short Quiz", "Quiz", "Periodic Examination", "Quarterly Examination", "Written Work", "Performance Task", "Assignment", "Project", "Other"]
 const gradingPeriods = ["First Quarter", "Second Quarter", "Third Quarter", "Fourth Quarter"]
@@ -19,15 +19,17 @@ const schoolYears = ["2024–2025", "2025–2026", "2026–2027", "2027–2028"]
 
 async function fetchRecords(): Promise<RecordsData> {
   const supabase = createClient()
-  const [classes, students, assessments, scores, settings] = await Promise.all([
+  const [classes, students, assessments, scores, settings, classSubjects, gradingConfigurations] = await Promise.all([
     supabase.from("classes").select("id, grade_level, section_name, school_year, subject_name, room").eq("is_active", true).order("grade_level"),
     supabase.from("students").select("id, class_id, student_number, first_name, last_name").eq("is_active", true).order("last_name"),
     supabase.from("assessments").select("id, class_id, title, assessment_type, subject, school_year, grading_period, assessment_date, total_points, passing_percentage").order("assessment_date", { ascending: false }),
     supabase.from("assessment_scores").select("id, assessment_id, student_id, score, remarks"),
     supabase.from("grading_settings").select("passing_grade, decimal_places, rounding_method, grading_weights").is("grade_level", null).eq("subject_name", "").order("updated_at", { ascending: false }).limit(1).maybeSingle(),
+    supabase.from("class_subjects").select("id,class_id,subject_name").eq("is_active", true),
+    supabase.from("class_grading_configurations").select("class_subject_id,school_year,grading_period,written_work_weight,performance_tasks_weight,quarterly_exam_weight,passing_grade,decimal_places,rounding_method").eq("is_active", true),
   ])
-  for (const result of [classes, students, assessments, scores, settings]) if (result.error) throw new Error(result.error.message)
-  return { classes: classes.data ?? [], students: students.data ?? [], assessments: assessments.data ?? [], scores: scores.data ?? [], gradingSettings: settings.data }
+  for (const result of [classes, students, assessments, scores, settings, classSubjects, gradingConfigurations]) if (result.error) throw new Error(result.error.message)
+  return { classes: classes.data ?? [], students: students.data ?? [], assessments: assessments.data ?? [], scores: scores.data ?? [], gradingSettings: settings.data, classSubjects: classSubjects.data ?? [], gradingConfigurations: gradingConfigurations.data ?? [] }
 }
 
 const blankForm = { title: "", assessment_type: "Quiz", subject: "", school_year: "2026–2027", grading_period: "First Quarter", assessment_date: new Date().toISOString().slice(0, 10), total_points: "20", passing_percentage: "75" }
@@ -37,14 +39,16 @@ export default function AcademicRecordsPage() {
   const [search, setSearch] = useState(""); const [schoolYear, setSchoolYear] = useState(""); const [classId, setClassId] = useState(""); const [subject, setSubject] = useState(""); const [period, setPeriod] = useState(""); const [type, setType] = useState("")
   const [showForm, setShowForm] = useState(false); const [editing, setEditing] = useState<Assessment | null>(null); const [form, setForm] = useState(blankForm); const [formError, setFormError] = useState(""); const [saving, setSaving] = useState(false)
   const [selected, setSelected] = useState<Assessment | null>(null); const [draftScores, setDraftScores] = useState<Record<string, { score: string; remarks: string }>>({}); const [scoreMessage, setScoreMessage] = useState(""); const [scoreError, setScoreError] = useState(""); const [savingScores, setSavingScores] = useState(false)
-  const classes = data?.classes ?? []; const students = data?.students ?? []; const assessments = data?.assessments ?? []; const scores = data?.scores ?? []
+  const classes = data?.classes ?? []; const students = data?.students ?? []; const assessments = data?.assessments ?? []; const scores = data?.scores ?? []; const classSubjects = data?.classSubjects ?? []; const gradingConfigurations = data?.gradingConfigurations ?? []
   const gradingSettings = data?.gradingSettings
-  const gradePolicy = { passingGrade: Number(gradingSettings?.passing_grade ?? 75), decimalPlaces: Number(gradingSettings?.decimal_places ?? 2), roundingMethod: gradingSettings?.rounding_method ?? "half_up", weights: gradingSettings?.grading_weights ?? { "Written Work": 30, "Performance Tasks": 50, "Quarterly Assessment": 20 } } as const
+  const defaultGradePolicy = { passingGrade: Number(gradingSettings?.passing_grade ?? 75), decimalPlaces: Number(gradingSettings?.decimal_places ?? 2), roundingMethod: gradingSettings?.rounding_method ?? "half_up", weights: gradingSettings?.grading_weights ?? { "Written Work": 30, "Performance Tasks": 50, "Quarterly Assessment": 20 } } as const
+  const periodKey = (value: string) => value.startsWith("First") ? "Q1" : value.startsWith("Second") ? "Q2" : value.startsWith("Third") ? "Q3" : value.startsWith("Fourth") ? "Q4" : value
+  const policyFor = (classIdValue: string, subjectValue: string, periodValue: string, yearValue: string | null) => { const subjectRow = classSubjects.find((row) => row.class_id === classIdValue && row.subject_name === subjectValue); const config = gradingConfigurations.find((row) => row.class_subject_id === subjectRow?.id && row.grading_period === periodKey(periodValue) && row.school_year === (yearValue ?? "")); return config ? { passingGrade: Number(config.passing_grade), decimalPlaces: Number(config.decimal_places), roundingMethod: config.rounding_method, weights: { "Written Work": Number(config.written_work_weight), "Performance Tasks": Number(config.performance_tasks_weight), "Quarterly Assessment": Number(config.quarterly_exam_weight) } } : defaultGradePolicy }
   const subjects = [...new Set(assessments.map((item) => item.subject).filter(Boolean))]
   const filtered = assessments.filter((item) => `${item.title} ${item.subject}`.toLowerCase().includes(search.toLowerCase()) && (!schoolYear || item.school_year === schoolYear) && (!classId || item.class_id === classId) && (!subject || item.subject === subject) && (!period || item.grading_period === period) && (!type || item.assessment_type === type))
   const previewStudents = students.filter((student) => (!classId || student.class_id === classId) && (!subject || assessments.some((assessment) => assessment.class_id === student.class_id && assessment.subject === subject)))
   const previewAssessments = assessments.filter((assessment) => (!classId || assessment.class_id === classId) && (!subject || assessment.subject === subject) && (!period || assessment.grading_period === period))
-  const gradePreviews = previewStudents.slice(0, 10).map((student) => ({ student, result: calculateGrade(student.id, previewAssessments.map((assessment) => ({ id: assessment.id, assessmentType: assessment.assessment_type, gradingPeriod: assessment.grading_period, subject: assessment.subject, totalPoints: Number(assessment.total_points) })), scores.map((score) => ({ assessmentId: score.assessment_id, studentId: score.student_id, score: score.score === null ? null : Number(score.score) })), gradePolicy, subject, period) }))
+  const gradePreviews = previewStudents.slice(0, 10).map((student) => ({ student, result: calculateGrade(student.id, previewAssessments.map((assessment) => ({ id: assessment.id, assessmentType: assessment.assessment_type, gradingPeriod: assessment.grading_period, subject: assessment.subject, totalPoints: Number(assessment.total_points) })), scores.map((score) => ({ assessmentId: score.assessment_id, studentId: score.student_id, score: score.score === null ? null : Number(score.score) })), policyFor(student.class_id, subject || previewAssessments[0]?.subject || "", period || previewAssessments[0]?.grading_period || "", previewAssessments[0]?.school_year), subject, period) }))
   const selectedStudents = selected ? students.filter((student) => student.class_id === selected.class_id) : []
   const selectedScores = selected ? scores.filter((score) => score.assessment_id === selected.id) : []
   const recordedCount = selectedStudents.filter((student) => selectedScores.find((score) => score.student_id === student.id)?.score !== null && selectedScores.find((score) => score.student_id === student.id)?.score !== undefined).length

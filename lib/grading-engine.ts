@@ -31,7 +31,7 @@ export type GradeResult = {
 const defaultCategoryMap: Record<string, GradeCategory> = {
   "Short Quiz": "Written Work", Quiz: "Written Work", Assignment: "Written Work", "Written Work": "Written Work",
   "Performance Task": "Performance Tasks", Project: "Performance Tasks", "Performance Tasks": "Performance Tasks",
-  "Periodic Examination": "Quarterly Assessment", "Quarterly Examination": "Quarterly Assessment", "Quarterly Assessment": "Quarterly Assessment",
+  "Periodic Examination": "Quarterly Assessment", "Quarterly Examination": "Quarterly Assessment", "Quarterly Exam": "Quarterly Assessment", "Quarterly Assessment": "Quarterly Assessment",
 }
 
 function round(value: number, places: number, method: GradingPolicy["roundingMethod"]) {
