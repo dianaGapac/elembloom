@@ -15,6 +15,7 @@ export type GradeAssessment = {
   gradingPeriod: string
   subject: string
   totalPoints: number
+  gradingCategory?: string | null
 }
 
 export type GradeScore = { assessmentId: string; studentId: string; score: number | null }
@@ -24,7 +25,7 @@ export type GradeResult = {
   weightedPercentage: number | null
   transmutedGrade: number | null
   remark: string
-  categories: Array<{ name: string; weight: number; average: number | null; contribution: number | null; recorded: number; total: number }>
+  categories: Array<{ name: string; weight: number; average: number | null; contribution: number | null; recorded: number; total: number; rawRecorded: number; rawTotal: number }>
   missingAssessments: string[]
 }
 
@@ -45,14 +46,12 @@ export function calculateGrade(studentId: string, assessments: GradeAssessment[]
   const filtered = assessments.filter((assessment) => (!subject || assessment.subject === subject) && (!gradingPeriod || assessment.gradingPeriod === gradingPeriod))
   const categoryMap = { ...defaultCategoryMap, ...(policy.categoryMap ?? {}) }
   const categories = Object.entries(policy.weights).map(([name, weight]) => {
-    const rows = filtered.filter((assessment) => (categoryMap[assessment.assessmentType] ?? "Written Work") === name)
+    const rows = filtered.filter((assessment) => (assessment.gradingCategory ?? categoryMap[assessment.assessmentType] ?? "Written Work") === name)
     const recorded = rows.map((assessment) => scores.find((score) => score.assessmentId === assessment.id && score.studentId === studentId)).filter((score) => score?.score !== null && score?.score !== undefined)
-    const percentages = rows.map((assessment) => {
-      const score = scores.find((item) => item.assessmentId === assessment.id && item.studentId === studentId)
-      return score?.score === null || score?.score === undefined || assessment.totalPoints <= 0 ? null : Number(score.score) / assessment.totalPoints * 100
-    }).filter((value): value is number => value !== null)
-    const percentageAverage = percentages.length ? percentages.reduce((sum, value) => sum + value, 0) / percentages.length : null
-    return { name, weight: Number(weight), average: percentageAverage === null ? null : round(percentageAverage, policy.decimalPlaces, policy.roundingMethod), contribution: percentageAverage === null ? null : percentageAverage * Number(weight) / 100, recorded: percentages.length, total: rows.length }
+    const rawTotal = rows.reduce((sum, assessment) => sum + Math.max(0, Number(assessment.totalPoints)), 0)
+    const rawRecorded = recorded.reduce((sum, score) => sum + Math.max(0, Number(score?.score ?? 0)), 0)
+    const rawPercentage = rawTotal > 0 && recorded.length ? rawRecorded / rawTotal * 100 : null
+    return { name, weight: Number(weight), average: rawPercentage === null ? null : round(rawPercentage, policy.decimalPlaces, policy.roundingMethod), contribution: rawPercentage === null ? null : rawPercentage * Number(weight) / 100, recorded: recorded.length, total: rows.length, rawRecorded, rawTotal }
   })
   const missingAssessments = filtered.filter((assessment) => !scores.some((score) => score.assessmentId === assessment.id && score.studentId === studentId && score.score !== null && score.score !== undefined)).map((assessment) => assessment.id)
   const active = categories.filter((category) => category.total > 0)
