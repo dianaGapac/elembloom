@@ -12,7 +12,7 @@ export async function updateSession(request: NextRequest) {
   const pathname = request.nextUrl.pathname
   const publicRoutes = new Set(["/login", "/register", "/forgot-password", "/auth/callback"])
   const isPublicRoute = publicRoutes.has(pathname)
-  const isProtectedRoute = pathname === "/dashboard" || pathname.startsWith("/classes") || pathname.startsWith("/pupils") || pathname.startsWith("/academic-records") || pathname.startsWith("/risk-assessment") || pathname.startsWith("/interventions") || pathname.startsWith("/settings") || pathname.startsWith("/profile") || pathname.startsWith("/parent-notifications") || pathname.startsWith("/reports")
+  const isProtectedRoute = pathname === "/dashboard" || pathname.startsWith("/classes") || pathname.startsWith("/pupils") || pathname.startsWith("/academic-records") || pathname.startsWith("/academic-activities") || pathname.startsWith("/risk-assessment") || pathname.startsWith("/interventions") || pathname.startsWith("/settings") || pathname.startsWith("/profile") || pathname.startsWith("/parent-notifications") || pathname.startsWith("/reports")
 
   if (!user && isProtectedRoute) {
     const url = request.nextUrl.clone()
