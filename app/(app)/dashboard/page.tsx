@@ -7,6 +7,7 @@ import { AlertCircle, CalendarDays, CheckCircle2, ClipboardCheck, Clock3, FileTe
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { matchesPupilGender, PupilGenderFilter, sortPupilsAlphabetically, type PupilGenderFilterValue } from "@/components/pupils/gender-filter"
+import { periodLabelForSchoolYear } from "@/lib/academic-structure"
 
 type Profile = { full_name: string | null; school_name: string | null }
 type ClassRecord = { id: string; grade_level: number; section_name: string; school_year: string; is_active: boolean }
@@ -14,7 +15,8 @@ type Student = { id: string; student_number: string; first_name: string; last_na
 type Attendance = { student_id: string; class_id: string; attendance_date: string; status: "present" | "late" | "absent" | "excused" }
 type Assessment = { id: string; title: string; assessment_date: string; class_id: string; subject: string; grading_period: string }
 type Intervention = { id: string; student_id: string; concern: string; status: "planned" | "ongoing" | "completed" | "on_hold"; start_date: string | null; target_review_date: string | null; updated_at?: string }
-type Data = { profile: Profile | null; classes: ClassRecord[]; students: Student[]; attendance: Attendance[]; assessments: Assessment[]; interventions: Intervention[] }
+type TermPeriod = { school_year: string; short_label: string; display_name: string; start_date: string; end_date: string }
+type Data = { profile: Profile | null; classes: ClassRecord[]; students: Student[]; attendance: Attendance[]; assessments: Assessment[]; interventions: Intervention[]; terms: TermPeriod[] }
 type AttendanceState = Record<string, Attendance["status"]>
 
 const todayInManila = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date())
@@ -25,16 +27,17 @@ async function fetchDashboard(): Promise<Data> {
   const supabase = createClient()
   const { data: auth } = await supabase.auth.getUser()
   if (!auth.user) throw new Error("Your session has expired. Please sign in again.")
-  const [profile, classes, students, attendance, assessments, interventions] = await Promise.all([
+  const [profile, classes, students, attendance, assessments, interventions, terms] = await Promise.all([
     supabase.from("profiles").select("full_name, school_name").eq("id", auth.user.id).maybeSingle(),
     supabase.from("classes").select("id, grade_level, section_name, school_year, is_active").eq("teacher_id", auth.user.id).eq("is_active", true).order("grade_level"),
     supabase.from("students").select("id, student_number, first_name, last_name, class_id, gender, is_active").eq("teacher_id", auth.user.id).eq("is_active", true).order("last_name").order("first_name"),
     supabase.from("attendance").select("student_id, class_id, attendance_date, status").eq("teacher_id", auth.user.id).order("attendance_date", { ascending: false }).limit(3000),
     supabase.from("assessments").select("id, title, assessment_date, class_id, subject, grading_period").eq("teacher_id", auth.user.id).order("assessment_date", { ascending: false }).limit(20),
     supabase.from("interventions").select("id, student_id, concern, status, start_date, target_review_date, updated_at").eq("teacher_id", auth.user.id).order("updated_at", { ascending: false }),
+    supabase.from("grading_periods").select("school_year,short_label,display_name,start_date,end_date").eq("teacher_id", auth.user.id).order("quarter_number"),
   ])
-  for (const result of [profile, classes, students, attendance, assessments, interventions]) if (result.error) throw result.error
-  return { profile: profile.data, classes: classes.data ?? [], students: students.data ?? [], attendance: attendance.data ?? [], assessments: assessments.data ?? [], interventions: interventions.data ?? [] }
+  for (const result of [profile, classes, students, attendance, assessments, interventions, terms]) if (result.error) throw result.error
+  return { profile: profile.data, classes: classes.data ?? [], students: students.data ?? [], attendance: attendance.data ?? [], assessments: assessments.data ?? [], interventions: interventions.data ?? [], terms: terms.data ?? [] }
 }
 
 function interventionDate(date: string | null) { return date ? new Date(`${date}T00:00:00+08:00`) : null }
@@ -91,6 +94,8 @@ export default function DashboardPage() {
   if (error) return <section className="mx-auto max-w-7xl p-6"><div className="rounded-xl border border-destructive/30 bg-destructive/5 p-5"><h1 className="font-semibold">Unable to load dashboard</h1><p className="mt-2 text-sm text-muted-foreground">{error.message}</p></div></section>
 
   const today = todayInManila()
+  const activeTerm = (data?.terms ?? []).find((term) => term.school_year === selectedClassRecord?.school_year && term.start_date <= today && term.end_date >= today)
+  const daysUntilTermEnd = activeTerm ? Math.max(0, Math.ceil((Date.parse(`${activeTerm.end_date}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400000)) : null
   const todayAttendance = data?.attendance.filter((item) => item.class_id === activeClassId && item.attendance_date === today) ?? []
   const attendanceRate = todayAttendance.filter((item) => item.status !== "excused").length ? Math.round(todayAttendance.filter((item) => item.status === "present" || item.status === "late").length / todayAttendance.filter((item) => item.status !== "excused").length * 100) : null
   const activeInterventions = data?.interventions.filter((item) => item.status === "planned" || item.status === "ongoing") ?? []
@@ -104,6 +109,7 @@ export default function DashboardPage() {
   return <section className="mx-auto flex max-w-7xl flex-col gap-6 p-6 lg:p-8">
     {dirty && <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-200" role="status">You have unsaved attendance changes. Save before leaving this page.</div>}
     <div><p className="text-sm font-medium text-primary">{formatDate(today)}</p><h1 className="mt-1 text-3xl font-bold tracking-tight">Good morning, {data?.profile?.full_name?.split(" ")[0] || "Teacher"}</h1><p className="mt-2 text-muted-foreground">Your daily workspace for pupil progress and timely support.</p></div>
+    <div className="rounded-xl border bg-card p-5"><div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-center"><div><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Current academic term</p><h2 className="mt-1 text-xl font-semibold">{activeTerm ? `${periodLabelForSchoolYear(activeTerm.short_label, selectedClassRecord?.school_year)} · ${selectedClassRecord?.school_year}` : "Term dates not configured for the current date"}</h2><p className="mt-1 text-sm text-muted-foreground">{activeTerm ? `${formatDate(activeTerm.start_date)} – ${formatDate(activeTerm.end_date)}` : "Set term start and end dates in Settings → Terms."}</p></div>{activeTerm && <p className="rounded-lg bg-primary/10 px-4 py-3 text-sm font-medium text-primary">{daysUntilTermEnd === 0 ? "Term ends today" : `${daysUntilTermEnd} day${daysUntilTermEnd === 1 ? "" : "s"} until term ends`}</p>}</div></div>
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
       <Link href="/pupils" className="rounded-xl border bg-card p-5 transition hover:border-primary"><Users className="text-primary" /><p className="mt-4 text-sm text-muted-foreground">Active pupils</p><p className="mt-1 text-3xl font-bold">{students.length}</p></Link>
       <Link href="/risk-assessment" className="rounded-xl border bg-card p-5 transition hover:border-primary"><AlertCircle className="text-destructive" /><p className="mt-4 text-sm text-muted-foreground">Pupils needing review</p><p className="mt-1 text-3xl font-bold">{attention.length}</p></Link>

@@ -1,13 +1,14 @@
 "use client"
 
 import Link from "next/link"
-import { useParams, useSearchParams } from "next/navigation"
+import { useParams, useRouter, useSearchParams } from "next/navigation"
 import useSWR from "swr"
 import { ArrowLeft, CheckCircle2, MessageSquare, Save } from "lucide-react"
 import { useState } from "react"
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { matchesPupilGender, PupilGenderFilter, sortPupilsAlphabetically, type PupilGenderFilterValue } from "@/components/pupils/gender-filter"
+import { gradeLevelLabel, periodKeyForSchoolYear, periodLabelForSchoolYear } from "@/lib/academic-structure"
 
 const supabase = createClient()
 const fetcher = async (id: string, assignmentId: string | null) => {
@@ -28,6 +29,7 @@ const fetcher = async (id: string, assignmentId: string | null) => {
 
 export default function ActivityScoresPage() {
   const { id } = useParams<{ id: string }>()
+  const router = useRouter()
   const searchParams = useSearchParams()
   const assignmentId = searchParams.get("assignmentId")
   const { data, error, isLoading, mutate } = useSWR(id ? ["academic-activity-scores", id, assignmentId] : null, ([, activityId, selectedAssignment]) => fetcher(activityId, selectedAssignment))
@@ -40,6 +42,7 @@ export default function ActivityScoresPage() {
 
   const { activity, assignment, assessment, classes, students, enrollments, scores } = data
   const classRecord = classes.find((item) => item.id === assignment.class_id)
+  if (classRecord && classRecord.grade_level <= 1) return <main className="mx-auto max-w-6xl space-y-4 p-6 lg:p-8"><Link href="/class-records" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="size-4" />Class Records</Link><section className="rounded-xl border bg-card p-6"><h1 className="text-xl font-semibold">Progress-based assessment</h1><p className="mt-2 text-sm text-muted-foreground">{gradeLevelLabel(classRecord.grade_level)} uses categorical competency records rather than numeric scores.</p><Link href="/competency-records" className="mt-4 inline-flex text-sm font-medium text-primary hover:underline">Open Competency Records</Link></section></main>
   const pupils = sortPupilsAlphabetically(students.filter((student) => student.class_id === assignment.class_id && enrollments.some((enrollment) => enrollment.class_id === assignment.class_id && enrollment.student_id === student.id)))
   const visiblePupils = pupils.filter((student) => matchesPupilGender(student.gender, genderFilter))
   const passingScore = Number(activity.total_points) * Number(activity.passing_percentage) / 100
@@ -85,8 +88,9 @@ export default function ActivityScoresPage() {
       <div>
         <Link href={`/academic-activities/${activity.id}`} className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="size-4" />{activity.title}</Link>
         <h1 className="mt-3 text-3xl font-semibold tracking-tight">Score Entry</h1>
-        <p className="mt-2 text-sm text-muted-foreground">Grade {classRecord?.grade_level} – {classRecord?.section_name} · {assignment.grading_period} · {assessment.subject}</p>
+        <p className="mt-2 text-sm text-muted-foreground">{gradeLevelLabel(classRecord?.grade_level)} – {classRecord?.section_name} · {periodLabelForSchoolYear(assignment.grading_period, assignment.school_year)} · {assessment.subject}</p>
       </div>
+      {data.assignments.length > 1 && <label className="min-w-56 text-sm font-medium">Class for this assessment<select aria-label="Select class for score entry" className="mt-1.5 h-10 w-full rounded-md border bg-background px-3 font-normal" value={assignment.id} onChange={(event) => router.push(`/academic-activities/${activity.id}/scores?assignmentId=${encodeURIComponent(event.target.value)}`)}>{data.assignments.map((item) => { const assignedClass = classes.find((entry) => entry.id === item.class_id); return <option key={item.id} value={item.id}>{gradeLevelLabel(assignedClass?.grade_level)} – {assignedClass?.section_name ?? "Class"} · {periodLabelForSchoolYear(item.grading_period, item.school_year)}</option> })}</select></label>}
       <div className="flex gap-2">
         <Button type="button" variant="outline" disabled={saving}><Save data-icon="inline-start" />{saving ? "Saving…" : "Scores save on blur"}</Button>
         <Button type="button" onClick={() => void publish()} disabled={saving || assessment.status === "published"}><CheckCircle2 data-icon="inline-start" />{assessment.status === "published" ? "Published" : "Publish scores"}</Button>

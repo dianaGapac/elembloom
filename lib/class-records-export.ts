@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx"
+import { academicCategories } from "@/lib/academic-structure"
 
 export type ExportRow = {
   studentNumber: string
@@ -12,14 +13,15 @@ export type ExportRow = {
     contribution: number | null
   }>
   initialGrade: number | null
-  quarterlyGrade: number | null
+  termGrade: number | null
+  descriptor: string | null
   status: string
 }
 
 export type ExportAssessment = { id: string; title: string; category: string; totalPoints: number; assessmentDate: string }
 export type ExportContext = { classLabel: string; subject: string; schoolYear: string; weights: Record<string, number> }
 
-const categories = ["Written Work", "Performance Tasks", "Quarterly Assessment"] as const
+const categories = academicCategories
 
 function percentage(value: number | null) {
   return value === null ? "" : `${value.toFixed(2)}%`
@@ -41,7 +43,8 @@ export function buildClassRecordCsv(rows: ExportRow[], assessments: ExportAssess
       `${category} WS`,
     ]),
     "Initial Grade",
-    "Quarterly Grade",
+    "Term Grade",
+    "Descriptor",
     "Grade Status",
   ]
   const lines = [headers.map(csvCell).join(",")]
@@ -56,7 +59,7 @@ export function buildClassRecordCsv(rows: ExportRow[], assessments: ExportAssess
         percentage(result?.contribution ?? null),
       ]
     })
-    lines.push([row.studentNumber, row.learnerName, ...categoryValues, row.initialGrade ?? "", row.quarterlyGrade ?? "", row.status].map(csvCell).join(","))
+    lines.push([row.studentNumber, row.learnerName, ...categoryValues, row.initialGrade ?? "", row.termGrade ?? "", row.descriptor ?? "", row.status].map(csvCell).join(","))
   }
   return `\uFEFF${lines.join("\n")}`
 }
@@ -109,15 +112,16 @@ export function downloadClassRecordWorkbook(filename: string, rows: ExportRow[],
 
   const initialGradeColumn = column
   values[headerRow][initialGradeColumn] = "Initial Grade"
-  values[headerRow][initialGradeColumn + 1] = "Quarterly Grade"
-  values[headerRow][initialGradeColumn + 2] = "Grade Status"
-  values[columnHeadersRow].push("Initial Grade", "Quarterly Grade", "Grade Status")
-  values[highestScoreRow].push("", "", "")
-  columnWidths.push({ wch: 15 }, { wch: 16 }, { wch: 18 })
-  column += 3
+  values[headerRow][initialGradeColumn + 1] = "Term Grade"
+  values[headerRow][initialGradeColumn + 2] = "Descriptor"
+  values[headerRow][initialGradeColumn + 3] = "Grade Status"
+  values[columnHeadersRow].push("Initial Grade", "Term Grade", "Descriptor", "Grade Status")
+  values[highestScoreRow].push("", "", "", "")
+  columnWidths.push({ wch: 15 }, { wch: 16 }, { wch: 16 }, { wch: 18 })
+  column += 4
   for (const row of [0, 1, 2, 3]) merges.push({ s: { r: row, c: 0 }, e: { r: row, c: column - 1 } })
   merges.push({ s: { r: headerRow, c: 0 }, e: { r: headerRow, c: 1 } })
-  for (const gradeColumn of [initialGradeColumn, initialGradeColumn + 1, initialGradeColumn + 2]) {
+  for (const gradeColumn of [initialGradeColumn, initialGradeColumn + 1, initialGradeColumn + 2, initialGradeColumn + 3]) {
     merges.push({ s: { r: headerRow, c: gradeColumn }, e: { r: highestScoreRow, c: gradeColumn } })
   }
 
@@ -133,7 +137,7 @@ export function downloadClassRecordWorkbook(filename: string, rows: ExportRow[],
         percentage(result?.contribution ?? null),
       )
     }
-    valuesForRow.push(row.initialGrade ?? "", row.quarterlyGrade ?? "", row.status)
+    valuesForRow.push(row.initialGrade ?? "", row.termGrade ?? "", row.descriptor ?? "", row.status)
     values.push(valuesForRow)
   }
 
@@ -146,11 +150,11 @@ export function downloadClassRecordWorkbook(filename: string, rows: ExportRow[],
   const summaryValues: unknown[][] = [
     [`${periodLabel} Grade Summary`],
     [context ? `${context.classLabel} · ${context.subject} · ${context.schoolYear}` : periodLabel],
-    ["Student Number", "Learner Name", "Initial Grade", "Quarterly Grade", "Grade Status"],
-    ...rows.map((row) => [row.studentNumber, row.learnerName, row.initialGrade ?? "", row.quarterlyGrade ?? "", row.status]),
+    ["Student Number", "Learner Name", "Initial Grade", "Term Grade", "Descriptor", "Grade Status"],
+    ...rows.map((row) => [row.studentNumber, row.learnerName, row.initialGrade ?? "", row.termGrade ?? "", row.descriptor ?? "", row.status]),
   ]
   const summarySheet = XLSX.utils.aoa_to_sheet(summaryValues)
-  summarySheet["!cols"] = [{ wch: 18 }, { wch: 28 }, { wch: 16 }, { wch: 16 }, { wch: 18 }]
+  summarySheet["!cols"] = [{ wch: 18 }, { wch: 28 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 18 }]
   XLSX.utils.book_append_sheet(workbook, summarySheet, "Grade Summary")
   XLSX.writeFile(workbook, filename)
 }

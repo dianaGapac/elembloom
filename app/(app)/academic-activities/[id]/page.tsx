@@ -7,21 +7,9 @@ import { ArrowLeft, CalendarDays, CheckCircle2, ClipboardList, Edit3, FileText, 
 import { useState } from "react"
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
+import { academicCategories, gradeLevelLabel, normalizePeriod, periodKeyForSchoolYear, periodOptionsForSchoolYear } from "@/lib/academic-structure"
 
 const supabase = createClient()
-const assessmentPeriodLabels: Record<string, string> = {
-  Q1: "First Quarter",
-  Q2: "Second Quarter",
-  Q3: "Third Quarter",
-  Q4: "Fourth Quarter",
-}
-function normalizeGradingPeriod(value: string | null | undefined) {
-  const normalized = value?.trim().toLowerCase() ?? ""
-  const numericQuarter = normalized.match(/^(?:q|quarter\s*)([1-4])$/)
-  if (numericQuarter) return `Q${numericQuarter[1]}`
-  const namedQuarter = ["first", "second", "third", "fourth"].findIndex((name) => normalized.startsWith(name))
-  return namedQuarter >= 0 ? `Q${namedQuarter + 1}` : "Q1"
-}
 
 const fetcher = async (id: string) => {
   const [activity, assignments, assessments, classes, subjects, periods, activityTypes, students, enrollments] = await Promise.all([
@@ -51,7 +39,7 @@ export default function ActivityDetailPage() {
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState("")
-  const [assignmentPeriod, setAssignmentPeriod] = useState("Q1")
+  const [assignmentPeriod, setAssignmentPeriod] = useState("T1")
   const [activityDate, setActivityDate] = useState("")
   const [selectedClassIds, setSelectedClassIds] = useState<string[]>([])
   const [subjectByClass, setSubjectByClass] = useState<Record<string, string>>({})
@@ -68,11 +56,13 @@ export default function ActivityDetailPage() {
       : 0
     return { pupilCount: pupilIds.size, passedCount, rate: pupilIds.size ? Math.round((passedCount / pupilIds.size) * 100) : null }
   }
-  const gradingPeriods = data.periods.length ? data.periods : [{ short_label: "Q1", display_name: "Quarter 1", school_year: "" }, { short_label: "Q2", display_name: "Quarter 2", school_year: "" }, { short_label: "Q3", display_name: "Quarter 3", school_year: "" }, { short_label: "Q4", display_name: "Quarter 4", school_year: "" }]
+  const firstClass = classes.find((item) => item.id === assignments[0]?.class_id) ?? classes.find((item) => item.id === selectedClassIds[0]) ?? classes[0]
+  const gradingPeriods = periodOptionsForSchoolYear(firstClass?.school_year, data.periods.filter((item) => item.school_year === firstClass?.school_year))
+  const selectedAssignmentPeriod = gradingPeriods.some((item) => item.short_label === assignmentPeriod) ? assignmentPeriod : gradingPeriods[0]?.short_label ?? "T1"
   function openEditor() {
     const firstAssignment = assignments[0]
     const firstAssessment = assessments.find((item) => item.id === firstAssignment?.assessment_id) ?? assessments[0]
-    setAssignmentPeriod(normalizeGradingPeriod(firstAssignment?.grading_period ?? firstAssessment?.grading_period))
+    setAssignmentPeriod(periodKeyForSchoolYear(firstAssignment?.grading_period ?? firstAssessment?.grading_period, firstClass?.school_year) ?? "T1")
     setActivityDate(firstAssessment?.activity_date ?? "")
     setSelectedClassIds([])
     setSubjectByClass(Object.fromEntries(assignments.map((item) => [item.class_id, item.subject_offering_id ?? ""])))
@@ -95,10 +85,13 @@ export default function ActivityDetailPage() {
     const gradingCategory = String(form.get("gradingCategory") ?? "Written Work")
     if (!title) { setMessage("Enter an activity title."); return }
     if (!activityType) { setMessage("Choose an activity type."); return }
-    if (!["Written Work", "Performance Tasks", "Quarterly Assessment"].includes(gradingCategory)) { setMessage("Choose a valid grading category."); return }
-    if (!/^Q[1-4]$/.test(assignmentPeriod)) { setMessage("Choose a valid grading period."); return }
-    const assessmentPeriod = assessmentPeriodLabels[assignmentPeriod]
-    if (!assessmentPeriod) { setMessage("Choose a valid grading period."); return }
+    if (!academicCategories.includes(gradingCategory as typeof academicCategories[number])) { setMessage("Choose a valid grading category."); return }
+    if (!gradingPeriods.some((item) => item.short_label === selectedAssignmentPeriod)) { setMessage("Choose a valid grading period."); return }
+    if ([...assignments.map((item) => item.class_id), ...selectedClassIds].some((classId) => {
+      const classRecord = classes.find((item) => item.id === classId)
+      return classRecord && periodKeyForSchoolYear(selectedAssignmentPeriod, classRecord.school_year) !== selectedAssignmentPeriod
+    })) { setMessage("This activity can only be assigned to classes using the same grading-period structure."); return }
+    const assessmentPeriod = selectedAssignmentPeriod
     if (!Number.isFinite(totalPoints) || totalPoints <= 0) { setMessage("Total points must be greater than zero."); return }
     if (!Number.isFinite(passingPercentage) || passingPercentage < 0 || passingPercentage > 100) { setMessage("Passing percentage must be between 0 and 100."); return }
     if (assignments.some((assignment) => {
@@ -123,7 +116,7 @@ export default function ActivityDetailPage() {
       const assessmentValues = {
         title, assessment_type: activityType, grading_category: gradingCategory, activity_date: activityDate || null,
         subject: subject?.subject_name ?? classRecord.section_name ?? "General", school_year: classRecord.school_year,
-        grading_period: assessmentPeriod, assessment_date: assessmentDate, total_points: totalPoints,
+        grading_period: periodKeyForSchoolYear(assessmentPeriod, classRecord.school_year) ?? assessmentPeriod, assessment_date: assessmentDate, total_points: totalPoints,
         passing_percentage: passingPercentage, activity_id: activity.id, subject_offering_id: subjectId,
         description, instructions, due_date: dueDate,
       }
@@ -138,7 +131,7 @@ export default function ActivityDetailPage() {
         assessmentId = assessment.id
       }
       const { error: assignmentError } = await supabase.from("academic_activity_assignments").update({
-        subject_offering_id: subjectId, grading_period: assignmentPeriod, school_year: classRecord.school_year, assessment_id: assessmentId,
+        subject_offering_id: subjectId, grading_period: selectedAssignmentPeriod, school_year: classRecord.school_year, assessment_id: assessmentId,
       }).eq("id", assignment.id)
       if (assignmentError) throw new Error(`Assignment for ${classRecord.section_name} could not be saved: ${assignmentError.message}`)
     }
@@ -159,7 +152,7 @@ export default function ActivityDetailPage() {
       const assessmentValues = {
         title, assessment_type: activityType, grading_category: gradingCategory,
         activity_date: activityDate || null, subject: subject?.subject_name ?? classRecord.section_name ?? "General",
-        school_year: classRecord.school_year, grading_period: assessmentPeriod, assessment_date: assessmentDate,
+        school_year: classRecord.school_year, grading_period: periodKeyForSchoolYear(assessmentPeriod, classRecord.school_year) ?? assessmentPeriod, assessment_date: assessmentDate,
         total_points: totalPoints, passing_percentage: passingPercentage, activity_id: activity.id,
         subject_offering_id: subjectId, description, instructions, due_date: dueDate,
       }
@@ -176,7 +169,7 @@ export default function ActivityDetailPage() {
       }
       const assignmentValues = {
         activity_id: activity.id, teacher_id: auth.user.id, class_id: classId, subject_offering_id: subjectId,
-        grading_period: assignmentPeriod, school_year: classRecord.school_year, assessment_id: assessmentId,
+        grading_period: selectedAssignmentPeriod, school_year: classRecord.school_year, assessment_id: assessmentId,
       }
       const { error: assignmentError } = existingAssignment
         ? await supabase.from("academic_activity_assignments").update(assignmentValues).eq("id", existingAssignment.id)
@@ -210,8 +203,8 @@ export default function ActivityDetailPage() {
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="text-sm font-medium sm:col-span-2">Title<input name="title" defaultValue={activity.title} className="mt-1.5 h-10 w-full rounded-md border bg-background px-3 font-normal" required /></label>
         <label className="text-sm font-medium">Activity type<select name="activityType" defaultValue={activity.activity_type} required className="mt-1.5 h-10 w-full rounded-md border bg-background px-3 font-normal">{[...new Set(["Assignment", "Quiz", "Project", "Performance Task", "Quarterly Examination", ...data.activityTypes.map((item) => item.name), activity.activity_type])].map((item) => <option key={item}>{item}</option>)}</select></label>
-        <label className="text-sm font-medium">Grading category<select name="gradingCategory" defaultValue={assessments[0]?.grading_category ?? "Written Work"} required className="mt-1.5 h-10 w-full rounded-md border bg-background px-3 font-normal"><option>Written Work</option><option>Performance Tasks</option><option>Quarterly Assessment</option></select></label>
-        <label className="text-sm font-medium">Grading period<select aria-label="Edit grading period" value={assignmentPeriod} onChange={(event) => setAssignmentPeriod(event.target.value)} required className="mt-1.5 h-10 w-full rounded-md border bg-background px-3 font-normal">{gradingPeriods.filter((item, index, list) => list.findIndex((period) => period.short_label === item.short_label) === index).map((item) => <option key={item.short_label} value={item.short_label}>{item.display_name}</option>)}</select></label>
+        <label className="text-sm font-medium">Grading category<select name="gradingCategory" defaultValue={academicCategories.includes(assessments[0]?.grading_category as typeof academicCategories[number]) ? assessments[0]?.grading_category ?? academicCategories[0] : academicCategories[0]} required className="mt-1.5 h-10 w-full rounded-md border bg-background px-3 font-normal">{academicCategories.map((category) => <option key={category}>{category}</option>)}</select></label>
+        <label className="text-sm font-medium">Grading period<select aria-label="Edit grading period" value={selectedAssignmentPeriod} onChange={(event) => setAssignmentPeriod(event.target.value)} required className="mt-1.5 h-10 w-full rounded-md border bg-background px-3 font-normal">{gradingPeriods.filter((item, index, list) => list.findIndex((period) => period.short_label === item.short_label) === index).map((item) => <option key={item.short_label} value={item.short_label}>{item.display_name}</option>)}</select></label>
         <label className="text-sm font-medium">Highest possible score<input name="totalPoints" type="number" min="1" step="any" defaultValue={activity.total_points} className="mt-1.5 h-10 w-full rounded-md border bg-background px-3 font-normal" required /></label>
         <label className="text-sm font-medium">Passing percentage<input name="passingPercentage" type="number" min="0" max="100" step="any" defaultValue={activity.passing_percentage} className="mt-1.5 h-10 w-full rounded-md border bg-background px-3 font-normal" required /></label>
         <label className="text-sm font-medium">Activity date<input aria-label="Edit activity date" type="date" value={activityDate} onChange={(event) => setActivityDate(event.target.value)} className="mt-1.5 h-10 w-full rounded-md border bg-background px-3 font-normal" /></label>
@@ -225,7 +218,7 @@ export default function ActivityDetailPage() {
         <div className="grid gap-3 sm:grid-cols-2">{assignments.map((assignment) => {
           const classRecord = classes.find((item) => item.id === assignment.class_id)
           return <label key={assignment.id} className="rounded-lg border p-3 text-sm">
-            <span className="font-medium">Grade {classRecord?.grade_level} – {classRecord?.section_name}</span>
+            <span className="font-medium">{classRecord ? `${gradeLevelLabel(classRecord.grade_level)} – ${classRecord.section_name}` : "Class"}</span>
             <select aria-label={`Subject for ${classRecord?.section_name ?? "class"}`} value={subjectByClass[assignment.class_id] ?? ""} onChange={(event) => setSubjectByClass((current) => ({ ...current, [assignment.class_id]: event.target.value }))} className="mt-2 h-9 w-full rounded-md border bg-background px-2 text-sm">
               <option value="">General / no subject</option>{subjects.filter((subject) => subject.class_id === assignment.class_id).map((subject) => <option key={subject.id} value={subject.id}>{subject.subject_name}</option>)}
             </select>
@@ -235,7 +228,7 @@ export default function ActivityDetailPage() {
       <fieldset className="rounded-xl border p-4">
         <legend className="px-2 text-sm font-semibold">Assign to additional classes</legend>
         <div className="grid gap-3 sm:grid-cols-2">{classes.filter((klass) => !assignedClassIds.has(klass.id)).map((klass) => <label key={klass.id} className="rounded-lg border p-3">
-          <span className="flex items-center gap-2 text-sm"><input type="checkbox" checked={selectedClassIds.includes(klass.id)} onChange={() => setSelectedClassIds((current) => current.includes(klass.id) ? current.filter((id) => id !== klass.id) : [...current, klass.id])} />Grade {klass.grade_level} – {klass.section_name}</span>
+          <span className="flex items-center gap-2 text-sm"><input type="checkbox" checked={selectedClassIds.includes(klass.id)} onChange={() => setSelectedClassIds((current) => current.includes(klass.id) ? current.filter((id) => id !== klass.id) : [...current, klass.id])} />{gradeLevelLabel(klass.grade_level)} – {klass.section_name}</span>
           {selectedClassIds.includes(klass.id) && <select aria-label={`Subject for new ${klass.section_name} assignment`} value={subjectByClass[klass.id] ?? ""} onChange={(event) => setSubjectByClass((current) => ({ ...current, [klass.id]: event.target.value }))} className="mt-3 h-9 w-full rounded-md border bg-background px-2 text-sm"><option value="">General / no subject</option>{subjects.filter((subject) => subject.class_id === klass.id).map((subject) => <option key={subject.id} value={subject.id}>{subject.subject_name}</option>)}</select>}
         </label>)}</div>
       </fieldset>

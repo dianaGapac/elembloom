@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type ChangeEvent } from "react"
 import Link from "next/link"
-import { CalendarDays, CheckCircle2, ClipboardList, Mail, Plus, Save, Target, Users, CalendarClock, BellRing, ShieldAlert } from "lucide-react"
+import { CalendarDays, CheckCircle2, ClipboardList, Mail, Plus, Save, Target, Trash2, Users, CalendarClock, BellRing, ShieldAlert } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { classifyRisk, type RiskThresholds } from "@/lib/risk-engine"
 import { PlanSuggestionDialog } from "@/components/interventions/plan-suggestion-dialog"
@@ -55,6 +55,7 @@ export default function InterventionsPage() {
   const [planId, setPlanId] = useState("")
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [deletingPlanId, setDeletingPlanId] = useState<string | null>(null)
   const [message, setMessage] = useState("")
   const [error, setError] = useState("")
   const [activeTab, setActiveTab] = useState<"overview" | "objectives" | "sessions">("overview")
@@ -122,6 +123,28 @@ export default function InterventionsPage() {
   const activePlans = plans.filter((plan) => plan.status === "active")
   const upcomingSessions = sessions.filter((session) => { const date = new Date(`${session.scheduled_date}T00:00:00`); const now = new Date(); return session.status !== "completed" && date >= new Date(now.toDateString()) && date <= new Date(Date.now() + 7 * 86400000) }).length
   const pendingUpdates = sessionReports.filter((report) => report.parent_update_pending).length
+
+  async function deleteIntervention(plan: Plan) {
+    if (!window.confirm(`Permanently delete "${plan.title}" and its objectives, sessions, progress reports, and communication history? This cannot be undone.`)) return
+    setDeletingPlanId(plan.id)
+    setError("")
+    setMessage("")
+    const { data: auth, error: authError } = await supabase.auth.getUser()
+    if (authError || !auth.user) {
+      setError(authError?.message ?? "Please sign in again before deleting an intervention.")
+      setDeletingPlanId(null)
+      return
+    }
+    const { error: deleteError } = await supabase.from("intervention_plans").delete().eq("id", plan.id).eq("teacher_id", auth.user.id)
+    if (deleteError) setError(`Intervention could not be deleted: ${deleteError.message}`)
+    else {
+      setPlans((current) => current.filter((item) => item.id !== plan.id))
+      setObjectives((current) => current.filter((item) => item.plan_id !== plan.id))
+      setSessions((current) => current.filter((item) => item.plan_id !== plan.id))
+      setMessage("Intervention deleted.")
+    }
+    setDeletingPlanId(null)
+  }
 
   async function loadData() {
     setLoading(true); setError("")
@@ -286,10 +309,11 @@ export default function InterventionsPage() {
                 <td className="p-3"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${row.risk.level === "high" ? "bg-destructive/10 text-destructive" : row.risk.level === "moderate" ? "bg-amber-500/10 text-amber-700 dark:text-amber-300" : "bg-muted text-muted-foreground"}`}>{row.risk.label}</span></td>
                 <td className="max-w-48 p-3"><p className="truncate">{displayPlan?.title ?? "Not created"}</p>{displayPlan?.target_date && <p className="text-xs text-muted-foreground">Review by {displayPlan.target_date}</p>}</td>
                 <td className="p-3"><span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${activePlan ? "border-primary/40 bg-primary/10 text-primary" : "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"}`}>{status}</span></td>
-                <td className="p-3">{activePlan
+                <td className="p-3"><div className="flex items-center gap-2">{activePlan
                   ? <Link className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium hover:bg-muted" href={`/interventions/${activePlan.id}`}><ClipboardList className="size-4" />View / edit</Link>
                   : <Button type="button" size="sm" onClick={() => openInterventionPlan(row)}><Plus data-icon="inline-start" />{pendingPlan ? "Edit draft" : "Create plan"}</Button>}
-                </td>
+                  {displayPlan && <Button type="button" variant="ghost" size="icon" aria-label={`Delete intervention ${displayPlan.title}`} disabled={deletingPlanId === displayPlan.id} onClick={() => void deleteIntervention(displayPlan)}><Trash2 className="size-4 text-destructive" /></Button>}
+                </div></td>
               </tr>
             })}
             {!visibleRegisterRows.length && <tr><td colSpan={8} className="p-10 text-center text-sm text-muted-foreground">No pupils match these filters.</td></tr>}

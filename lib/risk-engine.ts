@@ -1,3 +1,5 @@
+import { periodKeyForSchoolYear } from "@/lib/academic-structure"
+
 export type RiskLevel = "high" | "moderate" | "low" | "incomplete"
 
 export type RiskClass = {
@@ -51,7 +53,7 @@ function latestScore(scores: RiskScore[], assessmentId: string, studentId: strin
 
 export function classifyRisk(student: RiskStudent, data: RiskData, schoolYear = "", period = ""): RiskClass {
   const studentClass = data.classes.find((item) => item.id === student.class_id)
-  const assessments = data.assessments.filter((item) => item.class_id === student.class_id && (!schoolYear || studentClass?.school_year === schoolYear) && (!period || (item as RiskAssessment & { grading_period?: string }).grading_period === period))
+  const assessments = data.assessments.filter((item) => item.class_id === student.class_id && (!schoolYear || studentClass?.school_year === schoolYear) && (!period || periodKeyForSchoolYear((item as RiskAssessment & { grading_period?: string }).grading_period, studentClass?.school_year) === period))
   const scored = assessments.map((assessment) => ({ assessment, score: latestScore(data.scores, assessment.id, student.id) })).filter((item) => item.score?.score !== null && item.score?.score !== undefined)
   const percentages = scored.map(({ assessment, score }) => Number(score!.score) / Number(assessment.total_points) * 100).filter((value) => Number.isFinite(value))
   const absentRecords = data.attendance.filter((item) => item.student_id === student.id && item.status === "absent" && (!schoolYear || item.attendance_date.startsWith(schoolYear.slice(0, 4))))

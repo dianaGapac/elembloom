@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
-import { ArrowLeft, CalendarDays, CheckCircle2, Mail, Pencil, Plus, Send } from "lucide-react"
+import { ArrowLeft, CalendarDays, CheckCircle2, Mail, Pencil, Plus, Send, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { createClient } from "@/lib/supabase/client"
 
@@ -58,6 +58,21 @@ export default function InterventionDetailPage({ params }: { params: Promise<{ p
     setActivating(false)
   }
 
+  async function deletePlan() {
+    const currentPlan = plan
+    if (!currentPlan) return
+    if (!window.confirm(`Permanently delete "${currentPlan.title}" and its objectives, sessions, progress reports, and communication history? This cannot be undone.`)) return
+    setError("")
+    const { data: auth, error: authError } = await supabase.auth.getUser()
+    if (authError || !auth.user) {
+      setError(authError?.message ?? "Please sign in again before deleting this intervention.")
+      return
+    }
+    const { error: deleteError } = await supabase.from("intervention_plans").delete().eq("id", currentPlan.id).eq("teacher_id", auth.user.id)
+    if (deleteError) setError(`Intervention could not be deleted: ${deleteError.message}`)
+    else window.location.assign("/interventions")
+  }
+
   async function sendParentUpdate(report?: Report, session?: Session) {
     const currentPlan = plan
     const currentStudent = student
@@ -99,6 +114,7 @@ export default function InterventionDetailPage({ params }: { params: Promise<{ p
         <div><p className="text-sm font-medium text-primary">Intervention details</p><h1 className="mt-1 text-3xl font-bold tracking-tight">{student.first_name} {student.last_name}</h1><p className="mt-2 text-muted-foreground">{plan.title} · Student ID {student.student_number} · {student.gender ?? "Gender not set"}</p></div>
         <div className="flex flex-wrap gap-2">
           <Link className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium" href={`/interventions?student=${student.id}&plan=${plan.id}`}><Pencil className="size-4" />Edit plan</Link>
+          <Button type="button" variant="outline" onClick={() => void deletePlan()}><Trash2 data-icon="inline-start" />Delete intervention</Button>
           <Link className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium" href={`/interventions?student=${student.id}&plan=${plan.id}&tab=objectives`}><Plus className="size-4" />Add objective</Link>
           <Link className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground" href={`/interventions?student=${student.id}&plan=${plan.id}&tab=sessions`}><Plus className="size-4" />Schedule session</Link>
           {plan.status !== "active" && <Button type="button" disabled={activating} onClick={() => void activatePlan()}><CheckCircle2 data-icon="inline-start" />{activating ? "Activating…" : "Activate plan"}</Button>}

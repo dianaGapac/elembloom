@@ -1,4 +1,6 @@
-export type GradeCategory = "Written Work" | "Performance Tasks" | "Quarterly Assessment"
+import { academicCategories, descriptorForGrade, normalizePeriod, transmutedGradeFor, type AcademicCategory } from "@/lib/academic-structure"
+
+export type GradeCategory = AcademicCategory
 
 export type GradingPolicy = {
   passingGrade: number
@@ -6,7 +8,7 @@ export type GradingPolicy = {
   roundingMethod: "half_up" | "floor" | "ceil"
   weights: Record<string, number>
   categoryMap?: Record<string, GradeCategory>
-  conversionBands?: Array<{ label: string; min: number; max: number }>
+  useTransmutation?: boolean
 }
 
 export type GradeAssessment = {
@@ -24,15 +26,34 @@ export type GradeResult = {
   status: "complete" | "incomplete"
   weightedPercentage: number | null
   transmutedGrade: number | null
+  descriptor: string | null
   remark: string
-  categories: Array<{ name: string; weight: number; average: number | null; contribution: number | null; recorded: number; total: number; rawRecorded: number; rawTotal: number }>
+  categories: Array<{ name: GradeCategory; weight: number; average: number | null; contribution: number | null; recorded: number; total: number; rawRecorded: number; rawTotal: number }>
   missingAssessments: string[]
 }
 
-const defaultCategoryMap: Record<string, GradeCategory> = {
-  "Short Quiz": "Written Work", Quiz: "Written Work", Assignment: "Written Work", "Written Work": "Written Work",
-  "Performance Task": "Performance Tasks", Project: "Performance Tasks", "Performance Tasks": "Performance Tasks",
-  "Periodic Examination": "Quarterly Assessment", "Quarterly Examination": "Quarterly Assessment", "Quarterly Exam": "Quarterly Assessment", "Quarterly Assessment": "Quarterly Assessment",
+const categoryAliases: Record<string, GradeCategory> = {
+  "Written Work": "Written/Oral Works",
+  "Written/Oral Works": "Written/Oral Works",
+  "Written / Oral Works": "Written/Oral Works",
+  "Performance Tasks": "Product/Performance Tasks",
+  "Performance Task": "Product/Performance Tasks",
+  "Product/Performance Tasks": "Product/Performance Tasks",
+  "Product / Performance Tasks": "Product/Performance Tasks",
+  "Quarterly Assessment": "Examinations",
+  "Quarterly Examination": "Examinations",
+  "Quarterly Exam": "Examinations",
+  "Periodic Examination": "Examinations",
+  Examinations: "Examinations",
+  "Short Quiz": "Written/Oral Works",
+  Quiz: "Written/Oral Works",
+  Assignment: "Written/Oral Works",
+  Project: "Product/Performance Tasks",
+}
+const legacyWeightKey: Record<GradeCategory, string> = {
+  "Written/Oral Works": "Written Work",
+  "Product/Performance Tasks": "Performance Tasks",
+  Examinations: "Quarterly Assessment",
 }
 
 function round(value: number, places: number, method: GradingPolicy["roundingMethod"]) {
@@ -43,10 +64,18 @@ function round(value: number, places: number, method: GradingPolicy["roundingMet
 }
 
 export function calculateGrade(studentId: string, assessments: GradeAssessment[], scores: GradeScore[], policy: GradingPolicy, subject?: string, gradingPeriod?: string): GradeResult {
-  const filtered = assessments.filter((assessment) => (!subject || assessment.subject === subject) && (!gradingPeriod || assessment.gradingPeriod === gradingPeriod))
-  const categoryMap = { ...defaultCategoryMap, ...(policy.categoryMap ?? {}) }
-  const categories = Object.entries(policy.weights).map(([name, weight]) => {
-    const rows = filtered.filter((assessment) => (assessment.gradingCategory ?? categoryMap[assessment.assessmentType] ?? "Written Work") === name)
+  const filtered = assessments.filter((assessment) => (!subject || assessment.subject === subject) && (!gradingPeriod || normalizePeriod(assessment.gradingPeriod) === normalizePeriod(gradingPeriod)))
+  const weights = Object.fromEntries(academicCategories.map((name) => {
+    const configuredWeight = policy.weights[name] ?? policy.weights[legacyWeightKey[name]] ?? 0
+    return [name, Number(configuredWeight)]
+  })) as Record<GradeCategory, number>
+  const categoryMap = { ...categoryAliases, ...(policy.categoryMap ?? {}) }
+  const categories = academicCategories.map((name) => {
+    const weight = weights[name]
+    const rows = filtered.filter((assessment) => {
+      const sourceCategory = assessment.gradingCategory ?? categoryMap[assessment.assessmentType] ?? "Written/Oral Works"
+      return categoryAliases[sourceCategory] === name || sourceCategory === name
+    })
     const recorded = rows.map((assessment) => scores.find((score) => score.assessmentId === assessment.id && score.studentId === studentId)).filter((score) => score?.score !== null && score?.score !== undefined)
     const rawTotal = rows.reduce((sum, assessment) => sum + Math.max(0, Number(assessment.totalPoints)), 0)
     const rawRecorded = recorded.reduce((sum, score) => sum + Math.max(0, Number(score?.score ?? 0)), 0)
@@ -54,10 +83,12 @@ export function calculateGrade(studentId: string, assessments: GradeAssessment[]
     return { name, weight: Number(weight), average: rawPercentage === null ? null : round(rawPercentage, policy.decimalPlaces, policy.roundingMethod), contribution: rawPercentage === null ? null : rawPercentage * Number(weight) / 100, recorded: recorded.length, total: rows.length, rawRecorded, rawTotal }
   })
   const missingAssessments = filtered.filter((assessment) => !scores.some((score) => score.assessmentId === assessment.id && score.studentId === studentId && score.score !== null && score.score !== undefined)).map((assessment) => assessment.id)
-  const active = categories.filter((category) => category.total > 0)
-  const complete = active.length > 0 && active.every((category) => category.recorded === category.total)
-  const weightedPercentage = complete ? round(categories.reduce((sum, category) => sum + (category.contribution ?? 0), 0), policy.decimalPlaces, policy.roundingMethod) : null
-  const transmutedGrade = weightedPercentage === null ? null : round(weightedPercentage, policy.decimalPlaces, policy.roundingMethod)
-  const remark = weightedPercentage === null ? "Incomplete" : weightedPercentage >= policy.passingGrade ? "Passed" : "Needs support"
-  return { status: complete ? "complete" : "incomplete", weightedPercentage, transmutedGrade, remark, categories, missingAssessments }
+  const required = categories.filter((category) => category.weight > 0)
+  const complete = required.length > 0 && required.every((category) => category.total > 0 && category.recorded === category.total)
+  const rawWeightedPercentage = complete ? categories.reduce((sum, category) => sum + (category.contribution ?? 0), 0) : null
+  const weightedPercentage = rawWeightedPercentage === null ? null : round(rawWeightedPercentage, policy.decimalPlaces, policy.roundingMethod)
+  const transmutedGrade = weightedPercentage === null || !policy.useTransmutation ? null : transmutedGradeFor(weightedPercentage)
+  const descriptor = descriptorForGrade(transmutedGrade)?.label ?? null
+  const remark = weightedPercentage === null ? "Incomplete" : transmutedGrade === null ? "Unverified" : transmutedGrade >= policy.passingGrade ? "Passed" : "Needs support"
+  return { status: complete ? "complete" : "incomplete", weightedPercentage, transmutedGrade, descriptor, remark, categories, missingAssessments }
 }
