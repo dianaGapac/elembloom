@@ -9,7 +9,7 @@ export type RiskClass = {
   lates: number
   attendanceRate: number | null
   assessed: string | null
-  subjects: Array<{ subject: string; average: number; passing: number; belowPassing: boolean }>
+  subjects: Array<{ subject: string; average: number | null; passing: number; belowPassing: boolean; recorded: number }>
   factors: string[]
   missing: string[]
   rules: string[]
@@ -62,9 +62,9 @@ export function classifyRisk(student: RiskStudent, data: RiskData, schoolYear = 
   const failed = scored.filter(({ assessment, score }) => Number(score!.score) / Number(assessment.total_points) * 100 < Number(assessment.passing_percentage)).length
   const subjects = Array.from(new Set(assessments.map((assessment) => assessment.subject))).map((subject) => {
     const subjectScores = scored.filter(({ assessment }) => assessment.subject === subject)
-    const subjectAverage = subjectScores.length ? subjectScores.reduce((sum, { assessment, score }) => sum + Number(score!.score) / Number(assessment.total_points) * 100, 0) / subjectScores.length : 0
+    const subjectAverage = subjectScores.length ? subjectScores.reduce((sum, { assessment, score }) => sum + Number(score!.score) / Number(assessment.total_points) * 100, 0) / subjectScores.length : null
     const passing = subjectScores.length ? Math.max(...subjectScores.map(({ assessment }) => Number(assessment.passing_percentage))) : data.settings.low_assessment_threshold
-    return { subject, average: subjectAverage, passing, belowPassing: subjectScores.length > 0 && subjectAverage < passing }
+    return { subject, average: subjectAverage, passing, belowPassing: subjectAverage !== null && subjectAverage < passing, recorded: subjectScores.length }
   })
   const missing: string[] = []
   const factors: string[] = []
