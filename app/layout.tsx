@@ -6,6 +6,11 @@ export const metadata: Metadata = {
   title: 'ElemBloom | Classroom support, made clearer',
   description: 'A focused workspace for Philippine elementary school teachers to monitor academic risk and manage interventions.',
   generator: 'v0.app',
+  icons: {
+    icon: '/logo.png',
+    shortcut: '/logo.png',
+    apple: '/logo.png',
+  },
 }
 
 export const viewport: Viewport = { colorScheme: 'light', themeColor: '#2E8B57', userScalable: false }

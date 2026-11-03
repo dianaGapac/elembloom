@@ -4,6 +4,7 @@ import { useState } from "react"
 import useSWR from "swr"
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
+import { DEFAULT_PAGE_SIZE, Pagination } from "@/components/ui/pagination"
 import { gradeLevelLabel, periodOptionsForSchoolYear } from "@/lib/academic-structure"
 
 const supabase = createClient()
@@ -33,6 +34,7 @@ export default function CompetencyRecordsPage() {
   const [ratings, setRatings] = useState<Record<string, string>>({})
   const [message, setMessage] = useState("")
   const [saving, setSaving] = useState(false)
+  const [page, setPage] = useState(1)
 
   if (isLoading) return <main className="mx-auto max-w-6xl p-6"><p className="text-sm text-muted-foreground">Loading competency records…</p></main>
   if (error || !data) return <main className="mx-auto max-w-6xl p-6"><p className="text-sm text-destructive">Unable to load competency records.</p></main>
@@ -43,6 +45,7 @@ export default function CompetencyRecordsPage() {
   const periods = periodOptionsForSchoolYear(selectedClass?.school_year)
   const activePeriod = periods.some((item) => item.short_label === period) ? period : periods[0]?.short_label ?? "T1"
   const pupils = data.students.filter((student) => data.enrollments.some((row) => row.class_id === selectedClass?.id && row.student_id === student.id))
+  const pagePupils = pupils.slice((page - 1) * DEFAULT_PAGE_SIZE, page * DEFAULT_PAGE_SIZE)
   const savedRecords = data.records.filter((row) => row.class_id === selectedClass?.id && row.subject_offering_id === selectedSubject?.id && row.grading_period === activePeriod)
   const savedCompetencies = [...new Set(savedRecords.map((record) => record.competency))].sort((a, b) => a.localeCompare(b))
   const scale = ratingScales[selectedClass?.grade_level ?? 0] ?? []
@@ -88,7 +91,7 @@ export default function CompetencyRecordsPage() {
         <p className="mt-1 text-sm text-muted-foreground">Rating scale: {scale.join(" / ")}</p>
       </div>
       <label className="block text-sm font-medium">Competency or progress area<input list="saved-competencies" className="mt-1.5 h-10 w-full rounded-md border bg-background px-3 font-normal" value={competency} onChange={(event) => { setCompetency(event.target.value); setRatings({}) }} placeholder="Enter a skill or select a previously used one" /><datalist id="saved-competencies">{savedCompetencies.map((name) => <option key={name} value={name} />)}</datalist></label>
-      {pupils.length ? <div className="overflow-x-auto rounded-lg border"><table className="w-full min-w-[560px] text-left text-sm"><thead className="bg-muted/50 text-xs text-muted-foreground"><tr><th className="px-4 py-3">Pupil</th><th className="px-4 py-3">Student number</th><th className="px-4 py-3">Progress rating</th></tr></thead><tbody className="divide-y">{pupils.map((student) => <tr key={student.id}><td className="px-4 py-3 font-medium">{student.last_name}, {student.first_name}</td><td className="px-4 py-3 text-muted-foreground">{student.student_number}</td><td className="px-4 py-3"><select aria-label={`Progress rating for ${student.first_name} ${student.last_name}`} className="h-9 w-full max-w-48 rounded-md border bg-background px-2" value={currentRatings[student.id] ?? ""} onChange={(event) => setRatings((current) => ({ ...current, [student.id]: event.target.value }))}><option value="" disabled={Boolean(savedRatings[student.id])}>Not rated</option>{scale.map((rating) => <option key={rating}>{rating}</option>)}</select></td></tr>)}</tbody></table></div> : <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">Enroll pupils in this class before recording competency progress.</p>}
+      {pupils.length ? <div className="overflow-x-auto rounded-lg border"><table className="w-full min-w-[560px] text-left text-sm"><thead className="bg-muted/50 text-xs text-muted-foreground"><tr><th className="px-4 py-3">Pupil</th><th className="px-4 py-3">Student number</th><th className="px-4 py-3">Progress rating</th></tr></thead><tbody className="divide-y">{pagePupils.map((student) => <tr key={student.id}><td className="px-4 py-3 font-medium">{student.last_name}, {student.first_name}</td><td className="px-4 py-3 text-muted-foreground">{student.student_number}</td><td className="px-4 py-3"><select aria-label={`Progress rating for ${student.first_name} ${student.last_name}`} className="h-9 w-full max-w-48 rounded-md border bg-background px-2" value={currentRatings[student.id] ?? ""} onChange={(event) => setRatings((current) => ({ ...current, [student.id]: event.target.value }))}><option value="" disabled={Boolean(savedRatings[student.id])}>Not rated</option>{scale.map((rating) => <option key={rating}>{rating}</option>)}</select></td></tr>)}</tbody></table><Pagination page={page} totalItems={pupils.length} onPageChange={setPage} /></div> : <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">Enroll pupils in this class before recording competency progress.</p>}
       {message && <p role="status" className="text-sm text-muted-foreground">{message}</p>}
       <div className="flex justify-end"><Button onClick={() => void saveRatings()} disabled={saving || !pupils.length}>{saving ? "Saving…" : "Save progress ratings"}</Button></div>
     </section>}

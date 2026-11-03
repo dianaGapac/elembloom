@@ -3,9 +3,10 @@
 import Link from "next/link"
 import { Fragment, useMemo, useState } from "react"
 import useSWR from "swr"
-import { ArrowDownToLine, ArrowLeft, ChevronDown, FileSpreadsheet, Search } from "lucide-react"
+import { ArrowDownToLine, ArrowLeft, ChevronDown, FileSpreadsheet, Medal, Search } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
+import { DEFAULT_PAGE_SIZE, Pagination } from "@/components/ui/pagination"
 import { matchesPupilGender, PupilGenderFilter, sortPupilsAlphabetically, type PupilGenderFilterValue } from "@/components/pupils/gender-filter"
 import { calculateGrade, type GradingPolicy } from "@/lib/grading-engine"
 import { buildClassRecordCsv, downloadClassRecordWorkbook, downloadCsv, type ExportAssessment, type ExportRow } from "@/lib/class-records-export"
@@ -53,7 +54,7 @@ function GradingWeightsPanel({
     <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
       <div>
         <h2 id="grading-weights-title" className="font-semibold">Grading weights · {gradingPeriod}</h2>
-        <p className="mt-1 text-sm text-muted-foreground">{savedWeights ? "From this subject’s saved My Classes grading settings." : "No custom policy is saved for this subject and term; showing default weights."} Attendance is excluded from academic grades.</p>
+        <p className="mt-1 text-sm text-muted-foreground">{savedWeights ? "From this subject’s saved My Classes grading settings." : "No custom policy is saved for this subject and term; showing default weights."}</p>
       </div>
       <p className="text-sm font-semibold text-primary">Total: {Object.values(weights).reduce((sum, weight) => sum + weight, 0)}%</p>
     </div>
@@ -76,6 +77,7 @@ export default function ClassRecordsPage() {
   const [search, setSearch] = useState("")
   const [sort, setSort] = useState<"name-asc" | "grade-asc" | "grade-desc">("name-asc")
   const [topTenOnly, setTopTenOnly] = useState(false)
+  const [page, setPage] = useState(1)
   const [statusFilter, setStatusFilter] = useState("all")
   const [genderFilter, setGenderFilter] = useState<PupilGenderFilterValue>("all")
   const [exportOpen, setExportOpen] = useState(false)
@@ -119,7 +121,9 @@ export default function ClassRecordsPage() {
   }, [data, selectedClass, selectedSubject, selectedPeriod, periods])
 
   const topTenIds = new Set((prepared?.rows ?? []).filter((row) => row.termGrade !== null).sort((a, b) => (b.termGrade ?? 0) - (a.termGrade ?? 0) || a.learnerName.localeCompare(b.learnerName)).slice(0, 10).map((row) => row.studentId))
+  const topTenRanks = new Map((prepared?.rows ?? []).filter((row) => row.termGrade !== null).sort((a, b) => (b.termGrade ?? 0) - (a.termGrade ?? 0) || a.learnerName.localeCompare(b.learnerName)).slice(0, 10).map((row, index) => [row.studentId, index + 1]))
   const visibleRows = prepared?.rows.filter((row) => matchesPupilGender(row.gender, genderFilter)).filter((row) => !topTenOnly || topTenIds.has(row.studentId)).filter((row) => row.learnerName.toLowerCase().includes(search.toLowerCase()) || row.studentNumber.toLowerCase().includes(search.toLowerCase())).filter((row) => statusFilter === "all" || (statusFilter === "missing" ? row.status === "Incomplete" : statusFilter === "complete" ? row.status !== "Incomplete" : row.status === "Needs support")).sort((a, b) => sort === "grade-desc" ? (b.termGrade ?? -1) - (a.termGrade ?? -1) || a.learnerName.localeCompare(b.learnerName) : sort === "grade-asc" ? (a.termGrade ?? Number.POSITIVE_INFINITY) - (b.termGrade ?? Number.POSITIVE_INFINITY) || a.learnerName.localeCompare(b.learnerName) : a.learnerName.localeCompare(b.learnerName)) ?? []
+  const pageRows = visibleRows.slice((page - 1) * DEFAULT_PAGE_SIZE, page * DEFAULT_PAGE_SIZE)
   const filenameBase = selectedClass && selectedSubject ? `ElemBloom_Grade${selectedClass.grade_level}_${selectedClass.section_name}_${selectedSubject.subject_name}_${selectedPeriod}_${selectedClass.school_year}`.replaceAll(/[^a-zA-Z0-9_-]/g, "_") : "ElemBloom_Class_Record"
   function exportCsv() { if (prepared) downloadCsv(`${filenameBase}.csv`, buildClassRecordCsv(prepared.rows, prepared.assessments)); setExportOpen(false) }
   function exportExcel() { if (prepared && selectedClass && selectedSubject) downloadClassRecordWorkbook(`${filenameBase}.xlsx`, prepared.rows, prepared.assessments, selectedPeriod, { classLabel: `${gradeLevelLabel(selectedClass.grade_level)} – ${selectedClass.section_name}`, subject: selectedSubject.subject_name, schoolYear: selectedClass.school_year, weights: savedWeights ?? fallbackWeights }); setExportOpen(false) }
@@ -182,12 +186,14 @@ export default function ClassRecordsPage() {
             <PupilGenderFilter value={genderFilter} onChange={setGenderFilter} />
           </div>}
         </div>
-        <div className="touch-pan-x overscroll-x-contain overflow-x-auto">
+        <details open className="group">
+          <summary className="cursor-pointer border-b bg-muted/20 px-4 py-3 text-sm font-medium">Class record grid <span className="ml-1 text-xs font-normal text-muted-foreground">Click to collapse or expand</span></summary>
+        <div className="touch-pan-x overscroll-x-contain max-h-[70vh] overflow-auto">
           <table className="w-full text-left text-sm" style={{ minWidth: `${Math.max(1400, quarterAssessments.length * 140 + 620)}px` }}>
             <caption className="sr-only">Read-only class record scores and category totals. PS is percentage score and WS is weighted score.</caption>
-            <thead className="bg-muted/50 text-xs text-muted-foreground">
+            <thead className="sticky top-0 z-[3] bg-primary text-xs text-primary-foreground">
               <tr>
-                <th rowSpan={3} className="sticky left-0 z-[2] bg-muted/50 px-4 py-3">Learner</th>
+                <th rowSpan={3} className="sticky left-0 z-[2] bg-primary px-4 py-3 text-primary-foreground">Learner</th>
                 {byCategory.map(({ category, items, weight }) => <th key={category} colSpan={items.length + 3} className="border-l px-3 py-2 text-center">{category} ({weight}%)</th>)}
                 <th rowSpan={3} className="border-l px-3 py-3">Initial Grade</th>
                 <th rowSpan={3} className="px-3 py-3">Term Grade</th>
@@ -212,8 +218,8 @@ export default function ClassRecordsPage() {
               </tr>
             </thead>
             <tbody className="divide-y">
-              {visibleRows.map((row) => <tr key={row.studentId} className="hover:bg-muted/30">
-                <td className="sticky left-0 bg-card px-4 py-3"><div className="flex items-center gap-2"><p className="font-medium">{row.learnerName}</p>{topTenIds.has(row.studentId) && <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-300">TOP 10</span>}</div><p className="text-xs text-muted-foreground">{row.studentNumber}</p></td>
+              {pageRows.map((row) => <tr key={row.studentId} className="hover:bg-muted/30">
+                <td className="sticky left-0 bg-card px-4 py-3"><div className="flex items-center gap-2"><p className="font-medium">{row.learnerName}</p>{topTenRanks.has(row.studentId) && <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-1 text-xs font-bold text-amber-800 dark:text-amber-300"><Medal className="size-3.5" />#{topTenRanks.get(row.studentId)}</span>}</div><p className="text-xs text-muted-foreground">{row.studentNumber}</p></td>
                 {byCategory.map(({ category, items }) => {
                   const result = row.categories[category]
                   return <Fragment key={category}>
@@ -231,13 +237,29 @@ export default function ClassRecordsPage() {
             </tbody>
           </table>
         </div>
+        </details>
+        <Pagination page={page} totalItems={visibleRows.length} onPageChange={setPage} />
         {!visibleRows.length && <p className="p-10 text-center text-sm text-muted-foreground">No pupils match the current filters.</p>}
       </section> : <SummaryTable summary={prepared?.summary ?? []} periods={periods.filter((item) => !("legacy" in item && item.legacy))} search={search} genderFilter={genderFilter} onGenderChange={setGenderFilter} />}
     </main>
   )
 }
 
-function SummaryTable({ summary, periods, search, genderFilter, onGenderChange }: { summary: Array<{ student_number: string; first_name: string; last_name: string; gender: string | null; periodGrades: Array<{ label: string; grade: number | null; status: string }> }>; periods: Array<{ short_label: string; display_name: string }>; search: string; genderFilter: PupilGenderFilterValue; onGenderChange: (value: PupilGenderFilterValue) => void }) { const rows = sortPupilsAlphabetically(summary.filter((row) => matchesPupilGender(row.gender, genderFilter) && `${row.first_name} ${row.last_name} ${row.student_number}`.toLowerCase().includes(search.toLowerCase()))); return <section className="overflow-hidden rounded-xl border bg-card"><div className="flex justify-end border-b p-4"><PupilGenderFilter value={genderFilter} onChange={onGenderChange} /></div><div className="touch-pan-x overscroll-x-contain overflow-x-auto"><table className="min-w-[760px] w-full text-left text-sm"><thead className="bg-muted/50 text-xs text-muted-foreground"><tr><th className="px-4 py-3">Learner</th>{periods.map((period) => <th key={period.short_label} className="px-4 py-3">{period.display_name}</th>)}<th className="px-4 py-3">Year status</th></tr></thead><tbody className="divide-y">{rows.map((row) => { const grades = row.periodGrades.map((item) => item.grade).filter((grade): grade is number => grade !== null); const average = grades.length ? grades.reduce((sum, grade) => sum + grade, 0) / grades.length : null; return <tr key={row.student_number}><td className="px-4 py-4"><p className="font-medium">{row.last_name}, {row.first_name}</p><p className="text-xs text-muted-foreground">{row.student_number}</p></td>{row.periodGrades.map((item) => <td key={item.label} className="px-4 py-4 tabular-nums">{item.grade === null ? "—" : item.grade.toFixed(2)}</td>)}<td className="px-4 py-4 font-medium">{average === null ? "Incomplete" : average.toFixed(2)}</td></tr>})}</tbody></table></div></section> }
+function SummaryTable({ summary, periods, search, genderFilter, onGenderChange }: { summary: Array<{ student_number: string; first_name: string; last_name: string; gender: string | null; periodGrades: Array<{ label: string; grade: number | null; status: string }> }>; periods: Array<{ short_label: string; display_name: string }>; search: string; genderFilter: PupilGenderFilterValue; onGenderChange: (value: PupilGenderFilterValue) => void }) {
+  const [page, setPage] = useState(1)
+  const rows = sortPupilsAlphabetically(summary.filter((row) => matchesPupilGender(row.gender, genderFilter) && `${row.first_name} ${row.last_name} ${row.student_number}`.toLowerCase().includes(search.toLowerCase())))
+  const pageRows = rows.slice((page - 1) * DEFAULT_PAGE_SIZE, page * DEFAULT_PAGE_SIZE)
+  return <section className="overflow-hidden rounded-xl border bg-card">
+    <div className="flex justify-end border-b p-4"><PupilGenderFilter value={genderFilter} onChange={onGenderChange} /></div>
+    <div className="max-h-[70vh] overflow-auto">
+      <table className="min-w-[760px] w-full text-left text-sm">
+        <thead className="sticky top-0 bg-primary text-xs text-primary-foreground"><tr><th className="px-4 py-3">Learner</th>{periods.map((period) => <th key={period.short_label} className="px-4 py-3">{period.display_name}</th>)}<th className="px-4 py-3">Year status</th></tr></thead>
+        <tbody className="divide-y">{pageRows.map((row) => { const grades = row.periodGrades.map((item) => item.grade).filter((grade): grade is number => grade !== null); const average = grades.length ? grades.reduce((sum, grade) => sum + grade, 0) / grades.length : null; return <tr key={row.student_number}><td className="px-4 py-4"><p className="font-medium">{row.last_name}, {row.first_name}</p><p className="text-xs text-muted-foreground">{row.student_number}</p></td>{row.periodGrades.map((item) => <td key={item.label} className="px-4 py-4 tabular-nums">{item.grade === null ? "—" : item.grade.toFixed(2)}</td>)}<td className="px-4 py-4 font-medium">{average === null ? "Incomplete" : average.toFixed(2)}</td></tr>})}</tbody>
+      </table>
+    </div>
+    <Pagination page={page} totalItems={rows.length} onPageChange={setPage} />
+  </section>
+}
 
 function CompetencyRecordTable({ pupils, competencyNames, records, classId }: {
   pupils: Array<{ id: string; student_number: string; first_name: string; last_name: string }>
@@ -245,6 +267,8 @@ function CompetencyRecordTable({ pupils, competencyNames, records, classId }: {
   records: Array<{ student_id: string; competency: string; rating: string }>
   classId: string
 }) {
+  const [page, setPage] = useState(1)
+  const pagePupils = pupils.slice((page - 1) * DEFAULT_PAGE_SIZE, page * DEFAULT_PAGE_SIZE)
   return <section className="overflow-hidden rounded-xl border bg-card">
     <div className="flex flex-col justify-between gap-3 border-b p-4 sm:flex-row sm:items-center">
       <div>
@@ -253,12 +277,12 @@ function CompetencyRecordTable({ pupils, competencyNames, records, classId }: {
       </div>
       <Link href="/competency-records" className="text-sm font-medium text-primary hover:underline">Manage competencies</Link>
     </div>
-    {competencyNames.length ? <div className="touch-pan-x overscroll-x-contain overflow-x-auto"><table className="w-full min-w-[640px] text-left text-sm">
-      <thead className="bg-muted/50 text-xs text-muted-foreground"><tr><th className="sticky left-0 bg-muted/50 px-4 py-3">Pupil</th>{competencyNames.map((name) => <th key={name} className="px-4 py-3">{name}</th>)}</tr></thead>
-      <tbody className="divide-y">{pupils.map((student) => <tr key={student.id}>
+    {competencyNames.length ? <><div className="touch-pan-x overscroll-x-contain max-h-[70vh] overflow-auto"><table className="w-full min-w-[640px] text-left text-sm">
+      <thead className="bg-primary text-xs text-primary-foreground"><tr><th className="sticky left-0 bg-primary px-4 py-3 text-primary-foreground">Pupil</th>{competencyNames.map((name) => <th key={name} className="px-4 py-3">{name}</th>)}</tr></thead>
+      <tbody className="divide-y">{pagePupils.map((student) => <tr key={student.id}>
         <td className="sticky left-0 bg-card px-4 py-3"><p className="font-medium">{student.last_name}, {student.first_name}</p><p className="text-xs text-muted-foreground">{student.student_number}</p></td>
         {competencyNames.map((name) => <td key={name} className="px-4 py-3 text-center font-medium">{records.find((record) => record.student_id === student.id && record.competency === name)?.rating ?? "—"}</td>)}
       </tr>)}</tbody>
-    </table></div> : <p className="p-8 text-center text-sm text-muted-foreground">No competency ratings are recorded for this learning area and term.</p>}
+    </table></div><Pagination page={page} totalItems={pupils.length} onPageChange={setPage} /></> : <p className="p-8 text-center text-sm text-muted-foreground">No competency ratings are recorded for this learning area and term.</p>}
   </section>
 }

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type ChangeEvent } from "react"
 import Link from "next/link"
 import { CalendarDays, CheckCircle2, ClipboardList, Mail, Plus, Save, Target, Trash2, Users, CalendarClock, BellRing, ShieldAlert } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Pagination } from "@/components/ui/pagination"
 import { classifyRisk, type RiskThresholds } from "@/lib/risk-engine"
 import { PlanSuggestionDialog } from "@/components/interventions/plan-suggestion-dialog"
 import type { SuggestedInterventionPlan } from "@/lib/intervention-planner"
@@ -20,6 +21,13 @@ type Plan = { id: string; student_id: string; title: string; owner_name: string 
 type Objective = { id: string; plan_id: string; concern: string; objective: string; strategy: string; resources: string | null; frequency: string | null; duration_minutes: number | null; assigned_teacher: string | null; expected_outcome: string | null; measurement_method: string | null; baseline: string | null; target: string | null; status: string }
 type Session = { id: string; plan_id: string; session_number: number; scheduled_date: string; start_time: string | null; end_time: string | null; activity: string; status: string }
 type SessionReport = { session_id: string; parent_update_pending: boolean | null; attendance: string | null; activities_conducted: string | null; skills_addressed: string | null; observation_results: string | null; previous_performance: string | null; current_performance: string | null; teacher_remarks: string | null; participation: string | null; challenges: string | null; follow_up_actions: string | null; next_session_date: string | null; supporting_notes: string | null; progress_summary: string | null }
+
+function progressNotes(values: Record<string, string>) {
+  return Object.entries(values)
+    .filter(([key, value]) => key !== "attendance" && key !== "actual_date" && value.trim())
+    .map(([key, value]) => `${key.replaceAll("_", " ")}: ${value.trim()}`)
+    .join("\n")
+}
 
 const today = new Date().toISOString().slice(0, 10)
 const inputClass = "mt-1 w-full rounded-lg border bg-background px-3 py-2 text-sm"
@@ -43,7 +51,7 @@ export default function InterventionsPage() {
   const [studentPage, setStudentPage] = useState(1)
   const [sessionPage, setSessionPage] = useState(1)
   const [planPage, setPlanPage] = useState(1)
-  const [planPageSize, setPlanPageSize] = useState(10)
+  const [planPageSize, setPlanPageSize] = useState(20)
   const [planSearch, setPlanSearch] = useState("")
   const [planRisk, setPlanRisk] = useState("all")
   const [planStatus, setPlanStatus] = useState("all")
@@ -118,7 +126,6 @@ export default function InterventionsPage() {
         && (planClass === "all" || row.student.class_id === planClass)
         && (planTeacher === "all" || (row.activePlan?.owner_name || row.draftPlan?.owner_name || "Unassigned") === planTeacher)
     })
-  const registerTotalPages = Math.max(1, Math.ceil(registerRows.length / planPageSize))
   const visibleRegisterRows = registerRows.slice((planPage - 1) * planPageSize, planPage * planPageSize)
   const activePlans = plans.filter((plan) => plan.status === "active")
   const upcomingSessions = sessions.filter((session) => { const date = new Date(`${session.scheduled_date}T00:00:00`); const now = new Date(); return session.status !== "completed" && date >= new Date(now.toDateString()) && date <= new Date(Date.now() + 7 * 86400000) }).length
@@ -265,13 +272,25 @@ export default function InterventionsPage() {
   async function saveReport() {
     const session = planSessions.find((item) => item.id === reportSessionId); if (!session) return
     setSaving(true); setError(""); const { data: { user } } = await supabase.auth.getUser(); if (!user) { setError("Your session has expired."); setSaving(false); return }
-    const source = Object.entries(reportForm).filter(([, value]) => value).map(([key, value]) => `${key.replaceAll("_", " ")}: ${value}`).join("\n")
-    setSummarySaving(true)
-    const summaryResponse = await fetch("/api/intervention-summary", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source }) })
-    const summaryBody = await summaryResponse.json().catch(() => ({})); setSummarySaving(false)
-    if (!summaryResponse.ok) { setError(summaryBody.error ?? "The progress summary could not be generated."); setSaving(false); return }
-    const { error: saveError } = await supabase.from("intervention_session_reports").upsert({ ...reportForm, progress_summary: summaryBody.summary, session_id: session.id, plan_id: planId, teacher_id: user.id, is_finalized: true, parent_update_pending: true }, { onConflict: "session_id" })
-    if (saveError) setError(saveError.message); else { setMessage("Session report saved and summarized for parent communication."); setReportSessionId(""); await loadData() }
+    const source = progressNotes(reportForm)
+    let progressSummary = source || null
+    let summaryWarning = ""
+    if (source) {
+      setSummarySaving(true)
+      try {
+        const summaryResponse = await fetch("/api/intervention-summary", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source }) })
+        const summaryBody = await summaryResponse.json().catch(() => ({})) as { error?: string; summary?: unknown }
+        if (!summaryResponse.ok) throw new Error(summaryBody.error ?? "The progress summary could not be generated.")
+        if (typeof summaryBody.summary !== "string" || !summaryBody.summary.trim()) throw new Error("The progress summary response was empty.")
+        progressSummary = summaryBody.summary.trim()
+      } catch (summaryError) {
+        summaryWarning = summaryError instanceof Error ? summaryError.message : "The automatic summary could not be generated."
+      } finally {
+        setSummarySaving(false)
+      }
+    }
+    const { error: saveError } = await supabase.from("intervention_session_reports").upsert({ ...reportForm, next_session_date: reportForm.next_session_date || null, progress_summary: progressSummary, session_id: session.id, plan_id: planId, teacher_id: user.id, is_finalized: true, parent_update_pending: true }, { onConflict: "session_id" })
+    if (saveError) setError(saveError.message); else { setMessage(summaryWarning ? `Session report saved. The automatic summary could not be generated: ${summaryWarning}` : "Session report saved and summarized for parent communication."); setReportSessionId(""); await loadData() }
     setSaving(false)
   }
   if (!selectedStudent) return <main className="mx-auto flex max-w-7xl flex-col gap-6 p-6 lg:p-8">
@@ -294,7 +313,7 @@ export default function InterventionsPage() {
       <div className="border-b p-4"><h2 className="font-semibold">Pupil risk register &amp; interventions</h2><p className="mt-1 text-sm text-muted-foreground">{registerRows.length} pupils need review or have an active plan. Pending plans include both unplanned pupils and saved drafts.</p></div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[980px] text-left text-sm">
-          <thead className="bg-muted/40 text-xs uppercase text-muted-foreground"><tr><th className="p-3">Pupil</th><th className="p-3">Class</th><th className="p-3">Focus subject / learning gap</th><th className="p-3">Performance</th><th className="p-3">Risk</th><th className="p-3">Intervention</th><th className="p-3">Status</th><th className="p-3">Action</th></tr></thead>
+          <thead className="bg-muted/40 text-xs uppercase text-muted-foreground"><tr><th className="p-3">Pupil</th><th className="p-3">Class</th><th className="p-3">Performance</th><th className="p-3">Risk</th><th className="p-3">Intervention</th><th className="p-3">Status</th><th className="p-3">Action</th></tr></thead>
           <tbody className="divide-y">
             {visibleRegisterRows.map((row) => {
               const activePlan = row.activePlan
@@ -304,7 +323,6 @@ export default function InterventionsPage() {
               return <tr key={row.student.id} className="hover:bg-muted/20">
                 <td className="p-3"><p className="font-medium">{row.student.last_name}, {row.student.first_name}</p><p className="text-xs text-muted-foreground">{row.student.student_number}</p></td>
                 <td className="p-3">Grade {row.cls?.grade_level ?? "—"} · {row.cls?.section_name ?? "—"}<p className="text-xs text-muted-foreground">{row.cls?.school_year}</p></td>
-                <td className="max-w-56 p-3"><p className="font-medium">{row.focusSubject}</p><p className="text-xs text-muted-foreground">{row.risk.subjects.find((item) => item.subject === row.focusSubject)?.belowPassing ? "Below configured passing mark" : row.risk.factors.join(" ") || "No subject gap identified"}</p></td>
                 <td className="p-3 tabular-nums">{row.focusAverage === null ? "No score data" : `${row.focusAverage.toFixed(1)}%`}</td>
                 <td className="p-3"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${row.risk.level === "high" ? "bg-destructive/10 text-destructive" : row.risk.level === "moderate" ? "bg-amber-500/10 text-amber-700 dark:text-amber-300" : "bg-muted text-muted-foreground"}`}>{row.risk.label}</span></td>
                 <td className="max-w-48 p-3"><p className="truncate">{displayPlan?.title ?? "Not created"}</p>{displayPlan?.target_date && <p className="text-xs text-muted-foreground">Review by {displayPlan.target_date}</p>}</td>
@@ -316,14 +334,11 @@ export default function InterventionsPage() {
                 </div></td>
               </tr>
             })}
-            {!visibleRegisterRows.length && <tr><td colSpan={8} className="p-10 text-center text-sm text-muted-foreground">No pupils match these filters.</td></tr>}
+            {!visibleRegisterRows.length && <tr><td colSpan={7} className="p-10 text-center text-sm text-muted-foreground">No pupils match these filters.</td></tr>}
           </tbody>
         </table>
       </div>
-      <div className="flex flex-col gap-3 border-t p-4 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-        <span>Showing {registerRows.length ? (planPage - 1) * planPageSize + 1 : 0}–{Math.min(planPage * planPageSize, registerRows.length)} of {registerRows.length}</span>
-        <div className="flex flex-wrap items-center gap-2"><label>Rows<select className="ml-2 rounded-md border bg-background px-2 py-1" value={planPageSize} onChange={(event) => { setPlanPageSize(Number(event.target.value)); setPlanPage(1) }}><option value={10}>10</option><option value={25}>25</option><option value={50}>50</option></select></label><Button type="button" size="sm" variant="outline" disabled={planPage === 1} onClick={() => setPlanPage((page) => page - 1)}>Previous</Button><span>Page {planPage} of {registerTotalPages}</span><Button type="button" size="sm" variant="outline" disabled={planPage >= registerTotalPages} onClick={() => setPlanPage((page) => page + 1)}>Next</Button></div>
-      </div>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t"><Pagination page={planPage} pageSize={planPageSize} totalItems={registerRows.length} onPageChange={setPlanPage} /><label className="px-4 py-3 text-sm">Rows<select className="ml-2 rounded-md border bg-background px-2 py-1" value={planPageSize} onChange={(event) => { setPlanPageSize(Number(event.target.value)); setPlanPage(1) }}><option value={10}>10</option><option value={20}>20</option></select></label></div>
     </section>
   </main>
   if (!selectedStudent) return <main className="mx-auto flex max-w-7xl flex-col gap-6 p-6 lg:p-8">
@@ -345,7 +360,7 @@ export default function InterventionsPage() {
       <div className="border-b p-4"><h2 className="font-semibold">Pupil risk register &amp; interventions</h2><p className="mt-1 text-sm text-muted-foreground">{registerRows.length} pupils need review or have an active plan. Pending plans include both unplanned pupils and saved drafts.</p></div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[980px] text-left text-sm">
-          <thead className="bg-muted/40 text-xs uppercase text-muted-foreground"><tr><th className="p-3">Pupil</th><th className="p-3">Class</th><th className="p-3">Focus subject / learning gap</th><th className="p-3">Performance</th><th className="p-3">Risk</th><th className="p-3">Intervention</th><th className="p-3">Status</th><th className="p-3">Action</th></tr></thead>
+          <thead className="bg-muted/40 text-xs uppercase text-muted-foreground"><tr><th className="p-3">Pupil</th><th className="p-3">Class</th><th className="p-3">Performance</th><th className="p-3">Risk</th><th className="p-3">Intervention</th><th className="p-3">Status</th><th className="p-3">Action</th></tr></thead>
           <tbody className="divide-y">
             {visibleRegisterRows.map((row) => {
               const activePlan = row.activePlan
@@ -355,7 +370,6 @@ export default function InterventionsPage() {
               return <tr key={row.student.id} className="hover:bg-muted/20">
                 <td className="p-3"><p className="font-medium">{row.student.last_name}, {row.student.first_name}</p><p className="text-xs text-muted-foreground">{row.student.student_number}</p></td>
                 <td className="p-3">Grade {row.cls?.grade_level ?? "—"} · {row.cls?.section_name ?? "—"}<p className="text-xs text-muted-foreground">{row.cls?.school_year}</p></td>
-                <td className="max-w-56 p-3"><p className="font-medium">{row.focusSubject}</p><p className="text-xs text-muted-foreground">{row.risk.subjects.find((item) => item.subject === row.focusSubject)?.belowPassing ? "Below configured passing mark" : row.risk.factors.join(" ") || "No subject gap identified"}</p></td>
                 <td className="p-3 tabular-nums">{row.focusAverage === null ? "No score data" : `${row.focusAverage.toFixed(1)}%`}</td>
                 <td className="p-3"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${row.risk.level === "high" ? "bg-destructive/10 text-destructive" : row.risk.level === "moderate" ? "bg-amber-500/10 text-amber-700 dark:text-amber-300" : "bg-muted text-muted-foreground"}`}>{row.risk.label}</span></td>
                 <td className="max-w-48 p-3"><p className="truncate">{displayPlan?.title ?? "Not created"}</p>{displayPlan?.target_date && <p className="text-xs text-muted-foreground">Review by {displayPlan.target_date}</p>}</td>
@@ -366,14 +380,11 @@ export default function InterventionsPage() {
                 </td>
               </tr>
             })}
-            {!visibleRegisterRows.length && <tr><td colSpan={8} className="p-10 text-center text-sm text-muted-foreground">No pupils match these filters.</td></tr>}
+            {!visibleRegisterRows.length && <tr><td colSpan={7} className="p-10 text-center text-sm text-muted-foreground">No pupils match these filters.</td></tr>}
           </tbody>
         </table>
       </div>
-      <div className="flex flex-col gap-3 border-t p-4 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-        <span>Showing {registerRows.length ? (planPage - 1) * planPageSize + 1 : 0}–{Math.min(planPage * planPageSize, registerRows.length)} of {registerRows.length}</span>
-        <div className="flex flex-wrap items-center gap-2"><label>Rows<select className="ml-2 rounded-md border bg-background px-2 py-1" value={planPageSize} onChange={(event) => { setPlanPageSize(Number(event.target.value)); setPlanPage(1) }}><option value={10}>10</option><option value={25}>25</option><option value={50}>50</option></select></label><Button type="button" size="sm" variant="outline" disabled={planPage === 1} onClick={() => setPlanPage((page) => page - 1)}>Previous</Button><span>Page {planPage} of {registerTotalPages}</span><Button type="button" size="sm" variant="outline" disabled={planPage >= registerTotalPages} onClick={() => setPlanPage((page) => page + 1)}>Next</Button></div>
-      </div>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t"><Pagination page={planPage} pageSize={planPageSize} totalItems={registerRows.length} onPageChange={setPlanPage} /><label className="px-4 py-3 text-sm">Rows<select className="ml-2 rounded-md border bg-background px-2 py-1" value={planPageSize} onChange={(event) => { setPlanPageSize(Number(event.target.value)); setPlanPage(1) }}><option value={10}>10</option><option value={20}>20</option></select></label></div>
     </section>
   </main>
   async function activatePlan() { if (!selectedPlan) return; const { error: updateError } = await supabase.from("intervention_plans").update({ status: "active", updated_at: new Date().toISOString() }).eq("id", selectedPlan.id); if (updateError) setError(updateError.message); else { setMessage("Plan activated."); await loadData() } }

@@ -7,6 +7,7 @@ import { ArrowLeft, CheckCircle2, MessageSquare, Save } from "lucide-react"
 import { useState } from "react"
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
+import { DEFAULT_PAGE_SIZE, Pagination } from "@/components/ui/pagination"
 import { matchesPupilGender, PupilGenderFilter, sortPupilsAlphabetically, type PupilGenderFilterValue } from "@/components/pupils/gender-filter"
 import { gradeLevelLabel, periodKeyForSchoolYear, periodLabelForSchoolYear } from "@/lib/academic-structure"
 
@@ -35,6 +36,7 @@ export default function ActivityScoresPage() {
   const { data, error, isLoading, mutate } = useSWR(id ? ["academic-activity-scores", id, assignmentId] : null, ([, activityId, selectedAssignment]) => fetcher(activityId, selectedAssignment))
   const [message, setMessage] = useState("")
   const [saving, setSaving] = useState(false)
+  const [page, setPage] = useState(1)
   const [genderFilter, setGenderFilter] = useState<PupilGenderFilterValue>("all")
 
   if (isLoading) return <main className="mx-auto max-w-6xl p-6"><p className="text-sm text-muted-foreground">Loading score entry…</p></main>
@@ -45,6 +47,7 @@ export default function ActivityScoresPage() {
   if (classRecord && classRecord.grade_level <= 1) return <main className="mx-auto max-w-6xl space-y-4 p-6 lg:p-8"><Link href="/class-records" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="size-4" />Class Records</Link><section className="rounded-xl border bg-card p-6"><h1 className="text-xl font-semibold">Progress-based assessment</h1><p className="mt-2 text-sm text-muted-foreground">{gradeLevelLabel(classRecord.grade_level)} uses categorical competency records rather than numeric scores.</p><Link href="/competency-records" className="mt-4 inline-flex text-sm font-medium text-primary hover:underline">Open Competency Records</Link></section></main>
   const pupils = sortPupilsAlphabetically(students.filter((student) => student.class_id === assignment.class_id && enrollments.some((enrollment) => enrollment.class_id === assignment.class_id && enrollment.student_id === student.id)))
   const visiblePupils = pupils.filter((student) => matchesPupilGender(student.gender, genderFilter))
+  const pagePupils = visiblePupils.slice((page - 1) * DEFAULT_PAGE_SIZE, page * DEFAULT_PAGE_SIZE)
   const passingScore = Number(activity.total_points) * Number(activity.passing_percentage) / 100
   const passedCount = pupils.filter((student) => {
     const score = scores.find((item) => item.assessment_id === assessment.id && item.student_id === student.id)?.score
@@ -108,10 +111,10 @@ export default function ActivityScoresPage() {
         <p className="text-sm text-muted-foreground">Showing {visiblePupils.length} of {pupils.length} enrolled pupils.</p>
         <PupilGenderFilter value={genderFilter} onChange={setGenderFilter} />
       </div>
-      <div className="overflow-x-auto">
+      <div className="max-h-[70vh] overflow-auto">
         <table className="w-full min-w-[760px] text-left text-sm">
           <thead className="bg-muted/50 text-xs text-muted-foreground"><tr><th className="px-4 py-3">Learner</th><th className="px-4 py-3">Gender</th><th className="px-4 py-3">Score / {activity.total_points}</th><th className="px-4 py-3">Percentage</th><th className="px-4 py-3">Feedback / remarks</th><th className="px-4 py-3">Status</th></tr></thead>
-          <tbody className="divide-y">{visiblePupils.map((student) => {
+          <tbody className="divide-y">{pagePupils.map((student) => {
             const score = scores.find((item) => item.assessment_id === assessment.id && item.student_id === student.id)
             const percentage = score?.score === null || score?.score === undefined ? null : (Number(score.score) / Number(activity.total_points)) * 100
             const passed = percentage !== null && percentage >= Number(activity.passing_percentage)
@@ -126,6 +129,7 @@ export default function ActivityScoresPage() {
           })}</tbody>
         </table>
       </div>
+      <Pagination page={page} totalItems={visiblePupils.length} onPageChange={setPage} />
       {!visiblePupils.length && <div className="p-10 text-center text-sm text-muted-foreground">{pupils.length ? "No pupils match the selected gender filter." : "No active pupils are enrolled in this class."}</div>}
     </section>
   </main>

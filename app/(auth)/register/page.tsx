@@ -2,11 +2,66 @@
 
 import Link from "next/link"
 import { useState } from "react"
-import { BadgeCheck, Eye, EyeOff, LockKeyhole, Mail, Sprout, UserRound } from "lucide-react"
+import { BadgeCheck, Eye, EyeOff, LockKeyhole, Mail, UserRound } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 
 export default function RegisterPage() {
-  const [fullName, setFullName] = useState(""); const [email, setEmail] = useState(""); const [password, setPassword] = useState(""); const [confirm, setConfirm] = useState(""); const [showPassword, setShowPassword] = useState(false); const [error, setError] = useState(""); const [loading, setLoading] = useState(false); const [complete, setComplete] = useState(false)
-  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) { event.preventDefault(); setError(""); if (password !== confirm) { setError("Passwords do not match."); return }; setLoading(true); const { error: signUpError } = await createClient().auth.signUp({ email: email.trim(), password, options: { emailRedirectTo: process.env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL ?? `${window.location.origin}/auth/callback`, data: { full_name: fullName.trim() } } }); if (signUpError) setError(signUpError.message.toLowerCase().includes("already") ? "Unable to create this account. Please check your details or sign in." : signUpError.message); else setComplete(true); setLoading(false) }
-  return <div className="relative flex min-h-screen flex-col overflow-hidden bg-[#e8fff3] px-4 py-8 text-[#17352a] sm:px-8"><div className="pointer-events-none absolute -top-40 left-1/2 size-[30rem] -translate-x-1/2 rounded-full bg-emerald-300/35 blur-3xl" /><header className="relative z-10 flex items-center justify-between"><div className="flex items-center gap-2"><span className="flex size-8 items-center justify-center rounded-lg bg-[#087a49] text-white"><Sprout className="size-4" /></span><div><p className="text-sm font-bold leading-none">ElemBloom</p><p className="mt-1 text-[10px] tracking-wider text-[#365448]">EDUCATOR PORTAL</p></div></div><p className="hidden text-xs text-[#365448] sm:block">Philippine Educator Core • DepEd Integrated</p></header><main className="relative z-10 flex flex-1 items-center justify-center py-10"><section className="w-full max-w-md rounded-2xl bg-white px-8 py-8 shadow-[0_18px_50px_rgba(24,91,57,.12)] sm:px-10"><div className="mb-6 text-center"><span className="flex mx-auto mb-3 size-10 items-center justify-center rounded-xl bg-[#087a49] text-white"><Sprout className="size-6" /></span><h1 className="text-2xl font-bold">ElemBloom</h1><p className="mt-1 text-[11px] font-semibold tracking-wide text-[#087a49]">HELPING EVERY LEARNER BLOOM</p><h2 className="mt-5 text-lg font-bold">Create Teacher Account</h2><p className="mt-1 text-sm text-[#52635a]">Sign up to begin monitoring learner growth and records.</p></div>{complete ? <div className="rounded-xl bg-[#e8f8ee] p-5 text-center text-sm text-[#365448]"><BadgeCheck className="mx-auto mb-2 size-8 text-[#087a49]" /><p className="font-bold text-[#17352a]">Check your email to continue</p><p className="mt-1">We sent a confirmation link to {email}.</p><Link href="/login" className="mt-4 inline-block font-bold text-[#087a49]">Back to sign in</Link></div> : <form onSubmit={handleSubmit} className="flex flex-col gap-4"><label className="flex flex-col gap-2 text-xs font-semibold">Full Name<div className="flex items-center gap-3 rounded-lg border border-[#e1ebe5] px-3 py-2.5"><UserRound className="size-4 text-[#77867e]" /><input required value={fullName} onChange={e => setFullName(e.target.value)} placeholder="e.g., Maria Santos" className="min-w-0 flex-1 bg-transparent text-sm font-normal outline-none placeholder:text-[#a5b0aa]" /></div></label><label className="flex flex-col gap-2 text-xs font-semibold">Email Address<div className="flex items-center gap-3 rounded-lg border border-[#e1ebe5] px-3 py-2.5"><Mail className="size-4 text-[#77867e]" /><input required type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="e.g., maria.santos@deped.gov.ph" className="min-w-0 flex-1 bg-transparent text-sm font-normal outline-none placeholder:text-[#a5b0aa]" /></div></label><label className="flex flex-col gap-2 text-xs font-semibold">Password<div className="flex items-center gap-3 rounded-lg border border-[#e1ebe5] px-3 py-2.5"><LockKeyhole className="size-4 text-[#77867e]" /><input required minLength={8} type={showPassword ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} placeholder="At least 8 characters" className="min-w-0 flex-1 bg-transparent text-sm font-normal outline-none placeholder:text-[#a5b0aa]" /><button type="button" aria-label="Toggle password visibility" onClick={() => setShowPassword(!showPassword)}>{showPassword ? <EyeOff className="size-4 text-[#77867e]" /> : <Eye className="size-4 text-[#77867e]" />}</button></div></label><label className="flex flex-col gap-2 text-xs font-semibold">Confirm Password<div className="flex items-center gap-3 rounded-lg border border-[#e1ebe5] px-3 py-2.5"><LockKeyhole className="size-4 text-[#77867e]" /><input required type="password" value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="Re-enter your password" className="min-w-0 flex-1 bg-transparent text-sm font-normal outline-none placeholder:text-[#a5b0aa]" /></div></label>{error && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>}<button disabled={loading} className="mt-1 rounded-lg bg-[#087a49] py-3 text-sm font-bold text-white hover:bg-[#05663c] disabled:opacity-60">{loading ? "Creating account…" : "Create Account →"}</button></form>} {!complete && <p className="mt-7 text-center text-xs text-[#52635a]">Already have an account? <Link href="/login" className="font-bold text-[#087a49]">Sign In</Link></p>}<p className="mt-7 flex items-center justify-center gap-1 text-[11px] text-[#52635a]"><BadgeCheck className="size-3 text-[#087a49]" /> Republic Act 10173 (Data Privacy Act of 2012) compliant</p></section></main><footer className="relative z-10 flex flex-col justify-between gap-2 text-[11px] text-[#52635a] sm:flex-row"><span>◉ Compliant with Republic Act 10173 (Data Privacy Act of 2012) • Mabini Elementary School</span><span>DepEd Region IV-A　•　GovPH Security Shield</span></footer></div>
+  const [fullName, setFullName] = useState("")
+  const [email, setEmail] = useState("")
+  const [password, setPassword] = useState("")
+  const [confirm, setConfirm] = useState("")
+  const [showPassword, setShowPassword] = useState(false)
+  const [error, setError] = useState("")
+  const [loading, setLoading] = useState(false)
+  const [complete, setComplete] = useState(false)
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setError("")
+    if (password !== confirm) { setError("Passwords do not match."); return }
+    setLoading(true)
+    const { error: signUpError } = await createClient().auth.signUp({
+      email: email.trim(),
+      password,
+      options: {
+        emailRedirectTo: process.env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL ?? `${window.location.origin}/auth/callback`,
+        data: { full_name: fullName.trim() },
+      },
+    })
+    if (signUpError) setError(signUpError.message.toLowerCase().includes("already") ? "Unable to create this account. Please check your details or sign in." : signUpError.message)
+    else setComplete(true)
+    setLoading(false)
+  }
+
+  return <main className="flex min-h-screen items-center justify-center bg-background px-4 py-8 text-foreground">
+    <section className="w-full max-w-md rounded-2xl border bg-card p-6 shadow-sm sm:p-8">
+      <header className="mb-6 text-center">
+        <img src="/logo.png" alt="ElemBloom" className="mx-auto h-24 w-40 object-contain" />
+        <h1 className="mt-4 text-2xl font-bold">Create your ElemBloom account</h1>
+        <p className="mt-2 text-sm text-muted-foreground">Manage classes, learning activities, and pupil progress in one workspace.</p>
+      </header>
+      {complete ? <div className="rounded-xl bg-secondary p-5 text-center text-sm">
+        <BadgeCheck className="mx-auto mb-2 size-8 text-primary" />
+        <p className="font-semibold">Check your email to continue</p>
+        <p className="mt-1 text-muted-foreground">We sent a confirmation link to {email}.</p>
+        <Link href="/login" className="mt-4 inline-block font-semibold text-primary hover:underline">Back to sign in</Link>
+      </div> : <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <label className="flex flex-col gap-2 text-sm font-medium">Full name
+          <span className="flex h-11 items-center gap-3 rounded-lg border px-3 focus-within:ring-2 focus-within:ring-ring"><UserRound className="size-4 text-muted-foreground" /><input required autoComplete="name" value={fullName} onChange={(event) => setFullName(event.target.value)} className="min-w-0 flex-1 bg-transparent text-sm outline-none" /></span>
+        </label>
+        <label className="flex flex-col gap-2 text-sm font-medium">Email address
+          <span className="flex h-11 items-center gap-3 rounded-lg border px-3 focus-within:ring-2 focus-within:ring-ring"><Mail className="size-4 text-muted-foreground" /><input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} className="min-w-0 flex-1 bg-transparent text-sm outline-none" /></span>
+        </label>
+        <label className="flex flex-col gap-2 text-sm font-medium">Password
+          <span className="flex h-11 items-center gap-3 rounded-lg border px-3 focus-within:ring-2 focus-within:ring-ring"><LockKeyhole className="size-4 text-muted-foreground" /><input required minLength={8} type={showPassword ? "text" : "password"} autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} className="min-w-0 flex-1 bg-transparent text-sm outline-none" /><button type="button" aria-label={showPassword ? "Hide password" : "Show password"} onClick={() => setShowPassword(!showPassword)} className="text-muted-foreground">{showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}</button></span>
+        </label>
+        <label className="flex flex-col gap-2 text-sm font-medium">Confirm password
+          <span className="flex h-11 items-center gap-3 rounded-lg border px-3 focus-within:ring-2 focus-within:ring-ring"><LockKeyhole className="size-4 text-muted-foreground" /><input required minLength={8} type="password" autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} className="min-w-0 flex-1 bg-transparent text-sm outline-none" /></span>
+        </label>
+        {error && <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
+        <button disabled={loading} className="h-11 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60">{loading ? "Creating account…" : "Create account"}</button>
+      </form>}
+      {!complete && <p className="mt-6 text-center text-sm text-muted-foreground">Already have an account? <Link href="/login" className="font-semibold text-primary hover:underline">Sign in</Link></p>}
+    </section>
+  </main>
 }
