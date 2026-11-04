@@ -13,13 +13,15 @@ export function sortPupilsAlphabetically<T extends { first_name: string; last_na
 export function PupilGenderFilter({
   value,
   onChange,
+  showLabel = true,
 }: {
   value: PupilGenderFilterValue
   onChange: (value: PupilGenderFilterValue) => void
+  showLabel?: boolean
 }) {
   return (
-    <label className="grid gap-1 text-xs font-medium text-muted-foreground">
-      Gender
+    <label className={`grid ${showLabel ? "gap-1 text-xs font-medium text-muted-foreground" : ""}`}>
+      {showLabel && "Gender"}
       <select
         aria-label="Filter pupils by gender"
         value={value}

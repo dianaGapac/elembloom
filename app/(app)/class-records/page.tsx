@@ -50,22 +50,28 @@ function GradingWeightsPanel({
   fallbackWeights: CategoryWeights
 }) {
   const weights = savedWeights ?? fallbackWeights
-  return <section className="rounded-xl border bg-card p-4" aria-labelledby="grading-weights-title">
-    <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
-      <div>
-        <h2 id="grading-weights-title" className="font-semibold">Grading weights · {gradingPeriod}</h2>
-        <p className="mt-1 text-sm text-muted-foreground">{savedWeights ? "From this subject’s saved My Classes grading settings." : "No custom policy is saved for this subject and term; showing default weights."}</p>
-      </div>
-      <p className="text-sm font-semibold text-primary">Total: {Object.values(weights).reduce((sum, weight) => sum + weight, 0)}%</p>
-    </div>
-    <div className="mt-4 grid gap-3 sm:grid-cols-3">
-      {categories.map((category) => <div key={category} className="rounded-lg border bg-muted/20 p-3"><p className="text-xs font-medium text-muted-foreground">{category}</p><p className="mt-1 text-lg font-semibold">{weights[category]}%</p></div>)}
-    </div>
-    <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <p className="text-xs text-muted-foreground">{gradeLevelLabel(gradeLevel)} · {schoolYear} · selected subject · {gradingPeriod}</p>
-      <Link href={`/classes/${classId}`} className="text-sm font-medium text-primary hover:underline">Manage in My Classes</Link>
-    </div>
-  </section>
+  return 
+
+  <> 
+  
+  // <section className="rounded-xl border bg-card p-4" aria-labelledby="grading-weights-title">
+  //   <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+  //     <div>
+  //       <h2 id="grading-weights-title" className="font-semibold">Grading weights · {gradingPeriod}</h2>
+  //       <p className="mt-1 text-sm text-muted-foreground">{savedWeights ? "From this subject’s saved My Classes grading settings." : "No custom policy is saved for this subject and term; showing default weights."}</p>
+  //     </div>
+  //     <p className="text-sm font-semibold text-primary">Total: {Object.values(weights).reduce((sum, weight) => sum + weight, 0)}%</p>
+  //   </div>
+  //   <div className="mt-4 grid gap-3 sm:grid-cols-3">
+  //     {categories.map((category) => <div key={category} className="rounded-lg border bg-muted/20 p-3"><p className="text-xs font-medium text-muted-foreground">{category}</p><p className="mt-1 text-lg font-semibold">{weights[category]}%</p></div>)}
+  //   </div>
+  //   <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+  //     <p className="text-xs text-muted-foreground">{gradeLevelLabel(gradeLevel)} · {schoolYear} · selected subject · {gradingPeriod}</p>
+  //     <Link href={`/classes/${classId}`} className="text-sm font-medium text-primary hover:underline">Manage in My Classes</Link>
+  //   </div>
+  // </section>
+
+  </>
 }
 
 export default function ClassRecordsPage() {
@@ -154,12 +160,12 @@ export default function ClassRecordsPage() {
         <label className="text-xs font-medium text-muted-foreground">Subject<select className="mt-1.5 h-10 w-full rounded-md border bg-background px-3 text-sm" value={selectedSubject?.id ?? ""} onChange={(event) => setSubjectId(event.target.value)}>{subjects.map((item) => <option key={item.id} value={item.id}>{item.subject_name}</option>)}</select></label>
         <label className="text-xs font-medium text-muted-foreground">Grading Period<select className="mt-1.5 h-10 w-full rounded-md border bg-background px-3 text-sm" value={selectedPeriod} onChange={(event) => setPeriod(event.target.value)}>{periods.map((item) => <option key={item.short_label} value={item.short_label}>{item.display_name}</option>)}</select></label>
       </section>
-      {selectedClass && selectedSubject && !isProgressClass && <GradingWeightsPanel key={`${selectedClass.id}:${selectedSubject.id}:${selectedClass.school_year}:${periodKeyForSchoolYear(selectedPeriod, selectedClass.school_year)}`} classId={selectedClass.id} gradeLevel={selectedClass.grade_level} schoolYear={selectedClass.school_year} gradingPeriod={selectedPeriod} savedWeights={savedWeights} fallbackWeights={fallbackWeights} />}
-      <div className="flex flex-wrap gap-1 rounded-xl border bg-card p-2">
+      {/* {selectedClass && selectedSubject && !isProgressClass && <GradingWeightsPanel key={`${selectedClass.id}:${selectedSubject.id}:${selectedClass.school_year}:${periodKeyForSchoolYear(selectedPeriod, selectedClass.school_year)}`} classId={selectedClass.id} gradeLevel={selectedClass.grade_level} schoolYear={selectedClass.school_year} gradingPeriod={selectedPeriod} savedWeights={savedWeights} fallbackWeights={fallbackWeights} />} */}
+      {/* <div className="flex flex-wrap gap-1 rounded-xl border bg-card p-2">
         <button type="button" onClick={() => setView("period")} className={`rounded-lg px-4 py-2 text-sm font-medium ${view === "period" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>{periods.find((item) => item.short_label === selectedPeriod)?.display_name ?? selectedPeriod}</button>
         {(periods.length ? periods : [{ short_label: "Q1", display_name: "Quarter 1" }, { short_label: "Q2", display_name: "Quarter 2" }, { short_label: "Q3", display_name: "Quarter 3" }, { short_label: "Q4", display_name: "Quarter 4" }]).filter((item) => item.short_label !== selectedPeriod).map((item) => <button type="button" key={item.short_label} onClick={() => { setPeriod(item.short_label); setView("period") }} className="rounded-lg px-4 py-2 text-sm text-muted-foreground hover:bg-muted">{item.display_name}</button>)}
         {selectedClass?.grade_level > 1 && <button type="button" onClick={() => setView("summary")} className={`rounded-lg px-4 py-2 text-sm font-medium ${view === "summary" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>Term Summary</button>}
-      </div>
+      </div> */}
       <section className="rounded-xl border bg-card p-5">
         <p className="text-sm font-medium text-primary">{gradeLevelLabel(selectedClass?.grade_level)} – {selectedClass?.section_name}</p>
         <h2 className="mt-1 text-2xl font-semibold">{selectedSubject?.subject_name ?? "Choose a subject"}</h2>
