@@ -59,7 +59,7 @@ export default function ForgotPasswordPage() {
 							</label>
 							{error && <p className='text-xs text-red-700'>{error}</p>}
 							<button className='rounded-lg bg-[#087a49] py-3 text-sm font-bold text-white'>
-								Send reset link
+								Send Reset Link
 							</button>
 						</form>
 					</>
