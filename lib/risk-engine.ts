@@ -15,6 +15,10 @@ export type RiskClass = {
   factors: string[]
   missing: string[]
   rules: string[]
+  academicPoints: number
+  attendancePoints: number
+  totalPoints: number
+  scoreBreakdown: Array<{ area: "Academic" | "Attendance"; label: string; detail: string; points: number }>
 }
 
 export type RiskThresholds = {
@@ -83,10 +87,27 @@ export function classifyRisk(student: RiskStudent, data: RiskData, schoolYear = 
   const ordered = scored.slice().sort((a, b) => a.assessment.assessment_date.localeCompare(b.assessment.assessment_date)).map(({ assessment, score }) => Number(score!.score) / Number(assessment.total_points) * 100)
   const decline = ordered.length >= 2 && ordered.at(-1)! < ordered.at(-2)! && ordered.at(-2)! - ordered.at(-1)! >= (data.settings.declining_assessments ?? 10)
   if (decline) { factors.push(`Recent assessment performance declined by at least ${data.settings.declining_assessments ?? 10} percentage points.`); rules.push("Declining assessment threshold") }
-  const academicPoints = (average !== null && average < data.settings.low_assessment_threshold ? 2 : 0) + (failed >= data.settings.repeated_failed_assessments ? 2 : failed > 0 ? 1 : 0) + (subjects.filter((subject) => subject.belowPassing).length > 1 ? 1 : 0) + (decline ? 1 : 0)
-  const attendancePoints = (absentRecords.length >= data.settings.attendance_concern_absences ? 2 : 0) + (data.settings.attendance_rate_concern !== undefined && attendanceRate !== null && attendanceRate < data.settings.attendance_rate_concern ? 2 : 0) + (data.settings.repeated_lateness !== undefined && lateRecords.length >= data.settings.repeated_lateness ? 1 : 0)
+  const belowPassingSubjects = subjects.filter((subject) => subject.belowPassing).length
+  const lowAveragePoints = average !== null && average < data.settings.low_assessment_threshold ? 2 : 0
+  const failedAssessmentPoints = failed >= data.settings.repeated_failed_assessments ? 2 : failed > 0 ? 1 : 0
+  const multipleSubjectPoints = belowPassingSubjects > 1 ? 1 : 0
+  const declinePoints = decline ? 1 : 0
+  const absencePoints = absentRecords.length >= data.settings.attendance_concern_absences ? 2 : 0
+  const attendanceRatePoints = data.settings.attendance_rate_concern !== undefined && attendanceRate !== null && attendanceRate < data.settings.attendance_rate_concern ? 2 : 0
+  const latenessPoints = data.settings.repeated_lateness !== undefined && lateRecords.length >= data.settings.repeated_lateness ? 1 : 0
+  const scoreBreakdown = [
+    { area: "Academic" as const, label: "Assessment average", detail: average === null ? "No scored assessments" : `${average.toFixed(1)}%; threshold ${data.settings.low_assessment_threshold}%`, points: lowAveragePoints },
+    { area: "Academic" as const, label: "Failed assessments", detail: `${failed} failed; ${data.settings.repeated_failed_assessments} needed for the repeated-failure rule`, points: failedAssessmentPoints },
+    { area: "Academic" as const, label: "Subjects below passing", detail: `${belowPassingSubjects} subject${belowPassingSubjects === 1 ? "" : "s"} below passing; more than one triggers this rule`, points: multipleSubjectPoints },
+    { area: "Academic" as const, label: "Recent assessment decline", detail: `A decline of at least ${data.settings.declining_assessments ?? 10} points between the latest two assessments`, points: declinePoints },
+    { area: "Attendance" as const, label: "Recorded absences", detail: `${absentRecords.length} absences; concern threshold ${data.settings.attendance_concern_absences}`, points: absencePoints },
+    { area: "Attendance" as const, label: "Attendance rate", detail: attendanceRate === null ? "No counted attendance records" : `${attendanceRate.toFixed(1)}%; concern threshold ${data.settings.attendance_rate_concern === undefined ? "not configured" : `${data.settings.attendance_rate_concern}%`}`, points: attendanceRatePoints },
+    { area: "Attendance" as const, label: "Late arrivals", detail: `${lateRecords.length} late arrivals; concern threshold ${data.settings.repeated_lateness ?? "not configured"}`, points: latenessPoints },
+  ]
+  const academicPoints = lowAveragePoints + failedAssessmentPoints + multipleSubjectPoints + declinePoints
+  const attendancePoints = absencePoints + attendanceRatePoints + latenessPoints
   const total = academicPoints + attendancePoints
   let level: RiskLevel = "incomplete"
   if (scored.length && countedAttendance.length) level = total >= data.settings.high_risk_score ? "high" : total >= data.settings.moderate_risk_score ? "moderate" : "low"
-  return { level, label: labels[level], average, failed, absences: absentRecords.length, lates: lateRecords.length, attendanceRate, assessed: scored.length ? scored.map(({ assessment }) => assessment.assessment_date).sort().at(-1) ?? null : null, subjects, factors, missing, rules }
+  return { level, label: labels[level], average, failed, absences: absentRecords.length, lates: lateRecords.length, attendanceRate, assessed: scored.length ? scored.map(({ assessment }) => assessment.assessment_date).sort().at(-1) ?? null : null, subjects, factors, missing, rules, academicPoints, attendancePoints, totalPoints: total, scoreBreakdown }
 }

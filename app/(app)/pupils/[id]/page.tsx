@@ -26,7 +26,8 @@ import {
 	normalizeCategoryWeights,
 	periodKeyForSchoolYear,
 	periodLabelForSchoolYear,
-	periodOptionsForSchoolYear,
+	gradingPeriodsForGrade,
+	subjectsForGrade,
 } from "@/lib/academic-structure";
 import jsPDF from "jspdf";
 import { Button } from "@/components/ui/button";
@@ -96,6 +97,16 @@ type CompetencyRecord = {
 	rating: string;
 	notes: string | null;
 };
+type EarlyLearningReport = {
+	id: string;
+	class_id: string;
+	student_id: string;
+	school_year: string;
+	grading_period: string;
+	what_child_can_do: string;
+	learning_to_improve: string;
+	teacher_comments: string;
+};
 
 const formatDate = (value: string) =>
 	new Intl.DateTimeFormat("en-PH", {
@@ -130,6 +141,7 @@ async function fetchDetails(id: string) {
 		attendanceResult,
 		offeringsResult,
 		competencyResult,
+		earlyReportsResult,
 	] = await Promise.all([
 		supabase
 			.from("assessments")
@@ -158,12 +170,18 @@ async function fetchDetails(id: string) {
 			.from("competency_records")
 			.select("id,subject_offering_id,grading_period,competency,rating,notes")
 			.eq("student_id", id),
+		supabase
+			.from("early_learning_reports")
+			.select("id,class_id,student_id,school_year,grading_period,what_child_can_do,learning_to_improve,teacher_comments")
+			.eq("class_id", student.class_id)
+			.eq("student_id", id),
 	]);
 	throwQueryError("Academic activities and scores", assessmentResult.error);
 	throwQueryError("Class record", classResult.error);
 	throwQueryError("Attendance history", attendanceResult.error);
 	throwQueryError("Subject offerings", offeringsResult.error);
 	throwQueryError("Competency records", competencyResult.error);
+	throwQueryError("Term progress reports", earlyReportsResult.error);
 	if (!classResult.data)
 		throw new Error("Class record: no class was found for this pupil.");
 	const offerings = offeringsResult.data ?? [];
@@ -205,6 +223,7 @@ async function fetchDetails(id: string) {
 		offerings,
 		configurations: (configResult.data ?? []) as ClassGradingConfiguration[],
 		competencies: (competencyResult.data ?? []) as CompetencyRecord[],
+		earlyLearningReports: (earlyReportsResult.data ?? []) as EarlyLearningReport[],
 	};
 }
 
@@ -355,6 +374,7 @@ export default function PupilDetails({
 			: null;
 	const subjectNames = [
 		...new Set([
+			...(classRecord.grade_level === 1 ? subjectsForGrade(1) : []),
 			...data.offerings.map((item) => item.subject_name),
 			...data.assessments.map((item) => item.subject),
 		]),
@@ -365,7 +385,8 @@ export default function PupilDetails({
 		subjectNames.includes("Physical Education and Health")
 			? [...subjectNames, "MAPEH"]
 			: subjectNames;
-	const availablePeriods = periodOptionsForSchoolYear(
+	const availablePeriods = gradingPeriodsForGrade(
+		classRecord.grade_level,
 		classRecord.school_year,
 		data.assessments.map((item) => ({
 			short_label: item.grading_period,
@@ -392,7 +413,8 @@ export default function PupilDetails({
 					};
 				})
 				.filter((item) => item.value > 0);
-	const reportPeriods = periodOptionsForSchoolYear(
+	const reportPeriods = gradingPeriodsForGrade(
+		classRecord.grade_level,
 		classRecord.school_year,
 		data.assessments
 			.filter((item) => item.school_year === classRecord.school_year)
@@ -612,6 +634,58 @@ export default function PupilDetails({
 					))
 		);
 	});
+	const reportNarratives = selectedReportRows.map((term) => ({
+		term: term.quarter,
+		report: data.earlyLearningReports.find(
+			(report) =>
+				report.school_year === classRecord.school_year &&
+				periodKeyForSchoolYear(
+					report.grading_period,
+					classRecord.school_year,
+				) ===
+					periodKeyForSchoolYear(term.key, classRecord.school_year),
+		),
+	}));
+	const schoolYearStart = Number(classRecord.school_year.match(/\d{4}/)?.[0]);
+	const gradeOneAttendanceMonths = [
+		{ name: "June", month: 6, yearOffset: 0 },
+		{ name: "July", month: 7, yearOffset: 0 },
+		{ name: "August", month: 8, yearOffset: 0 },
+		{ name: "September", month: 9, yearOffset: 0 },
+		{ name: "October", month: 10, yearOffset: 0 },
+		{ name: "November", month: 11, yearOffset: 0 },
+		{ name: "December", month: 12, yearOffset: 0 },
+		{ name: "January", month: 1, yearOffset: 1 },
+		{ name: "February", month: 2, yearOffset: 1 },
+		{ name: "March", month: 3, yearOffset: 1 },
+		{ name: "April", month: 4, yearOffset: 1 },
+	].map(({ name, month, yearOffset }) => {
+		const year = schoolYearStart + yearOffset;
+		const monthRecords = Number.isFinite(year)
+			? data.attendance.filter((item) => {
+						const [recordYear, recordMonth] = item.attendance_date
+							.split("-")
+							.map(Number);
+						return recordYear === year && recordMonth === month;
+					})
+			: [];
+		return {
+			name,
+			daysRecorded: monthRecords.length,
+			present: monthRecords.filter(
+					(item) => item.status === "present" || item.status === "late",
+			).length,
+			absent: monthRecords.filter((item) => item.status === "absent").length,
+		};
+	});
+	const gradeOneAttendanceTotals = gradeOneAttendanceMonths.reduce(
+		(totals, month) => ({
+			daysRecorded: totals.daysRecorded + month.daysRecorded,
+			present: totals.present + month.present,
+			absent: totals.absent + month.absent,
+		}),
+		{ daysRecorded: 0, present: 0, absent: 0 },
+	);
 	const reportHasConvertedGrades =
 		selectedReportRows.length > 0 &&
 		selectedReportRows.every((row) => row.final !== null);
@@ -668,7 +742,10 @@ export default function PupilDetails({
 			dateStyle: "medium",
 			timeZone: "Asia/Manila",
 		}).format(new Date());
-		const reportTitle = "PUPIL ACADEMIC REPORT CARD";
+		const isGradeOneReport = classRecord.grade_level === 1;
+		const reportTitle = isGradeOneReport
+			? "LEARNER'S PROGRESS REPORT CARD"
+			: "PUPIL ACADEMIC REPORT CARD";
 
 		pdf.setFillColor(46, 139, 87);
 		pdf.rect(0, 0, pageWidth, 31, "F");
@@ -704,16 +781,20 @@ export default function PupilDetails({
 			59,
 		);
 		pdf.text(
-			`Subject: ${reportSubject || "Not selected"}  |  Report period: ${reportPeriod}`,
+			isGradeOneReport
+				? `Report scope: ${reportPeriod}`
+				: `Subject: ${reportSubject || "Not selected"}  |  Report period: ${reportPeriod}`,
 			pageWidth - margin - 5,
 			45,
 			{ align: "right" },
 		);
 		pdf.setTextColor(71, 85, 105);
 		pdf.text(
-			isCompetencyClass
-				? "Categorical competency progress is shown. Numeric grades do not apply."
-				: "Grades use assessment scores and saved grading policies.",
+			isGradeOneReport
+				? "Descriptive progress and PACE ratings; no numeric grades."
+				: isCompetencyClass
+					? "Categorical competency progress is shown. Numeric grades do not apply."
+					: "Grades use assessment scores and saved grading policies.",
 			pageWidth - margin - 5,
 			53,
 			{ align: "right" },
@@ -723,7 +804,9 @@ export default function PupilDetails({
 		pdf.setFontSize(11);
 		pdf.setTextColor(30, 41, 59);
 		pdf.text(
-			isCompetencyClass
+			isGradeOneReport
+				? "Term narratives and attendance"
+				: isCompetencyClass
 				? "Competency progress results"
 				: "Term academic results",
 			margin,
@@ -731,7 +814,148 @@ export default function PupilDetails({
 		);
 
 		let y = 78;
-		if (isCompetencyClass) {
+		if (classRecord.grade_level === 1) {
+			const bodyWidth = tableWidth;
+			const halfWidth = (bodyWidth - 8) / 2;
+			const drawParagraph = (text: string, fontSize: number, x: number, width: number) => {
+				pdf.setFontSize(fontSize);
+				const lines = pdf.splitTextToSize(text, width);
+				pdf.text(lines, x, y);
+				y += lines.length * (fontSize * 0.45) + 2;
+			};
+			pdf.setFont("helvetica", "normal");
+			pdf.setFontSize(8);
+			drawParagraph(
+				"This report provides a descriptive account of your child's learning progress for each term. It highlights what your child can already do, what they are currently developing, and how they can be further supported.",
+				8,
+				margin,
+				bodyWidth,
+			);
+			drawParagraph(
+				"This report is based on varied evidence of learning, including classroom activities, observations, learner outputs, and assessments. It is designed to give a clearer understanding of development rather than relying on numerical or letter grades.",
+				8,
+				margin,
+				bodyWidth,
+			);
+			reportNarratives.forEach(({ term, report }) => {
+				const canDo = pdf.splitTextToSize(
+					report?.what_child_can_do || "No narrative recorded.",
+					halfWidth - 6,
+				);
+				const improve = pdf.splitTextToSize(
+					report?.learning_to_improve || "No narrative recorded.",
+					halfWidth - 6,
+				);
+				const rowHeight = Math.max(canDo.length, improve.length) * 4 + 17;
+				if (y + rowHeight > pageHeight - 22) {
+					pdf.addPage();
+					y = 18;
+				}
+				pdf.setFillColor(232, 245, 236);
+				pdf.rect(margin, y, bodyWidth, 8, "F");
+				pdf.setFont("helvetica", "bold");
+				pdf.setFontSize(9);
+				pdf.setTextColor(30, 41, 59);
+				pdf.text(term.toUpperCase(), margin + 2, y + 5.5);
+				y += 8;
+				pdf.setDrawColor(203, 213, 225);
+				pdf.rect(margin, y, halfWidth, rowHeight - 8);
+				pdf.rect(margin + halfWidth + 8, y, halfWidth, rowHeight - 8);
+				pdf.setFontSize(8);
+				pdf.text("What Your Child Can Do (Mga Nagagawa)", margin + 3, y + 5);
+				pdf.text(
+					"What Your Child Is Learning To Improve (Dapat Linangin)",
+					margin + halfWidth + 11,
+					y + 5,
+				);
+				pdf.setFont("helvetica", "normal");
+				pdf.text(canDo, margin + 3, y + 10);
+				pdf.text(improve, margin + halfWidth + 11, y + 10);
+				y += rowHeight;
+			});
+			if (y + 78 > pageHeight - 18) {
+				pdf.addPage();
+				y = 18;
+			}
+			y += 3;
+			pdf.setFont("helvetica", "bold");
+			pdf.setFontSize(9);
+			pdf.text("ATTENDANCE RECORD", margin, y);
+			y += 5;
+			const attendanceColumns = [
+				{ label: "Month", width: 52 },
+				{ label: "Days Recorded", width: 52 },
+				{ label: "Days Present", width: 52 },
+				{ label: "Times Absent", width: bodyWidth - 156 },
+			];
+			const drawAttendanceHeader = () => {
+				pdf.setFillColor(232, 245, 236);
+				pdf.rect(margin, y, bodyWidth, 7, "F");
+				pdf.setFont("helvetica", "bold");
+				pdf.setFontSize(7);
+				let x = margin;
+				for (const column of attendanceColumns) {
+					pdf.text(column.label, x + 2, y + 4.7);
+					x += column.width;
+				}
+				y += 7;
+			};
+			drawAttendanceHeader();
+			pdf.setFont("helvetica", "normal");
+			pdf.setFontSize(8);
+			for (const month of gradeOneAttendanceMonths) {
+				if (y + 6 > pageHeight - 25) {
+					pdf.addPage();
+					y = 18;
+					drawAttendanceHeader();
+				}
+				const values = [
+					month.name,
+					String(month.daysRecorded || "—"),
+					String(month.daysRecorded ? month.present : "—"),
+					String(month.daysRecorded ? month.absent : "—"),
+				];
+				let x = margin;
+				values.forEach((value, index) => {
+					pdf.text(value, x + 2, y + 4);
+					x += attendanceColumns[index].width;
+				});
+				pdf.setDrawColor(226, 232, 240);
+				pdf.line(margin, y + 6, margin + bodyWidth, y + 6);
+				y += 6;
+			}
+			pdf.setFont("helvetica", "bold");
+			pdf.text(
+				`TOTAL  ·  ${gradeOneAttendanceTotals.daysRecorded} days recorded  ·  ${gradeOneAttendanceTotals.present} present  ·  ${gradeOneAttendanceTotals.absent} absent`,
+				margin,
+				y + 5,
+			);
+			y += 12;
+			pdf.setFont("helvetica", "italic");
+			pdf.setFontSize(7);
+			pdf.text(
+				"Attendance totals use saved records only. Present includes late arrivals; excused entries are not counted as present or absent.",
+				margin,
+				y,
+			);
+			y += 7;
+			pdf.setFont("helvetica", "bold");
+			pdf.setFontSize(8);
+			pdf.text("NOTE TO PARENTS/GUARDIANS", margin, y);
+			y += 5;
+			pdf.setFont("helvetica", "normal");
+			drawParagraph(
+				"This report summarizes your child's progress for the selected term(s). Detailed PACE competency ratings are maintained in the class record.",
+				8,
+				margin,
+				bodyWidth,
+			);
+			y += 3;
+			pdf.setDrawColor(148, 163, 184);
+			pdf.line(margin, y + 5, margin + 65, y + 5);
+			pdf.setFontSize(8);
+			pdf.text("Parent's/Guardian's Signature", margin, y + 10);
+		} else if (isCompetencyClass) {
 			pdf.setFont("helvetica", "bold");
 			pdf.setFontSize(10);
 			pdf.text("Term · Competency / progress area · Rating · Notes", margin, y);
@@ -898,7 +1122,7 @@ export default function PupilDetails({
 		try {
 			const pdf = await buildReportPdf();
 			pdf.save(
-				`${student.last_name}-${reportSubject || "subject"}-report-card.pdf`,
+			`${student.last_name}-${classRecord.grade_level === 1 ? "Grade-1-SF9" : reportSubject || "subject"}-report-card.pdf`,
 			);
 		} catch (pdfError) {
 			setReportSendError(
@@ -915,7 +1139,7 @@ export default function PupilDetails({
 			);
 			return;
 		}
-		if (!reportSubject) {
+		if (!reportSubject && classRecord.grade_level !== 1) {
 			setReportSendError("Choose a subject before sending the report card.");
 			return;
 		}
@@ -929,8 +1153,10 @@ export default function PupilDetails({
 			if (!pdfData)
 				throw new Error("The report card PDF could not be generated.");
 			const scope = reportPeriod === "Full Year" ? "Full Year" : reportPeriod;
+			const reportLabel =
+				classRecord.grade_level === 1 ? "Grade-1-SF9" : reportSubject;
 			const fileName =
-				`${student.last_name}-${reportSubject}-${scope}-report-card.pdf`.replace(
+				`${student.last_name}-${reportLabel}-${scope}-report-card.pdf`.replace(
 					/[^a-zA-Z0-9._-]/g,
 					"-",
 				);
@@ -940,8 +1166,14 @@ export default function PupilDetails({
 				body: JSON.stringify({
 					studentId: student.id,
 					to: student.parent_guardian_email,
-					subject: `${reportPeriod} report card for ${student.first_name} ${student.last_name} - ${reportSubject}`,
-					message: `Dear ${student.parent_guardian_name || "Parent/Guardian"},\n\nAttached is ${student.first_name} ${student.last_name}'s ${reportPeriod.toLowerCase()} academic report card for ${reportSubject}.\n\nNumeric grades are shown only where the grading configuration and approved conversion rule are available.\n\nPlease contact the class adviser if you have any questions.\n\nElemBloom`,
+					subject:
+						classRecord.grade_level === 1
+							? `Grade 1 learner progress report card for ${student.first_name} ${student.last_name}`
+							: `${reportPeriod} report card for ${student.first_name} ${student.last_name} - ${reportSubject}`,
+					message:
+						classRecord.grade_level === 1
+							? `Dear ${student.parent_guardian_name || "Parent/Guardian"},\n\nAttached is ${student.first_name} ${student.last_name}'s learner progress report card for ${classRecord.school_year}. It includes term narratives, attendance records, and the detailed PACE competency record for each learning area.\n\nPlease contact the class adviser if you have any questions.\n\nElemBloom`
+							: `Dear ${student.parent_guardian_name || "Parent/Guardian"},\n\nAttached is ${student.first_name} ${student.last_name}'s ${reportPeriod.toLowerCase()} academic report card for ${reportSubject}.\n\nNumeric grades are shown only where the grading configuration and approved conversion rule are available.\n\nPlease contact the class adviser if you have any questions.\n\nElemBloom`,
 					type: "report_card",
 					attachment: {
 						fileName,
@@ -983,7 +1215,9 @@ export default function PupilDetails({
 				<div>
 					<p className='text-sm font-medium text-primary'>Pupil profile</p>
 					<h1 className='mt-1 text-3xl font-bold'>
-						{student.first_name} {student.last_name}
+						{classRecord.grade_level === 1
+							? "Learner's Progress Report Card"
+							: `${student.first_name} ${student.last_name}`}
 					</h1>
 					<p className='mt-2 text-muted-foreground'>
 						Student no. {student.student_number} ·{" "}
@@ -1388,8 +1622,7 @@ export default function PupilDetails({
 									onClick={sendReportCard}
 									disabled={
 										sendingReport ||
-										!student.parent_guardian_email ||
-										!reportSubject
+										!student.parent_guardian_email
 									}
 								>
 									<Mail data-icon='inline-start' />
@@ -1405,7 +1638,7 @@ export default function PupilDetails({
 							</div>
 						</div>
 						<div className='mt-5 grid gap-3 sm:grid-cols-3'>
-							<label className='text-sm font-medium'>
+							{classRecord.grade_level !== 1 && <label className='text-sm font-medium'>
 								Subject
 								<select
 									disabled={sendingReport}
@@ -1421,9 +1654,9 @@ export default function PupilDetails({
 										<option key={item}>{item}</option>
 									))}
 								</select>
-							</label>
+							</label>}
 							<label className='text-sm font-medium'>
-								Scope
+								{classRecord.grade_level === 1 ? "Report scope" : "Scope"}
 								<select
 									disabled={sendingReport}
 									className='mt-2 w-full rounded-lg border bg-background px-3 py-2'
@@ -1440,18 +1673,16 @@ export default function PupilDetails({
 									))}
 								</select>
 							</label>
-							<label className='text-sm font-medium'>
+							{!isCompetencyClass && <label className='text-sm font-medium'>
 								Passing Grade:
-								{!isCompetencyClass && (
-									<div className='rounded-lg border bg-muted/30 p-3 text-sm text-center'>
-										<strong>
-											{passingGradeLabels.length
-												? passingGradeLabels.join(" / ")
-												: "Not configured"}
-										</strong>
-									</div>
-								)}{" "}
-							</label>
+								<div className='rounded-lg border bg-muted/30 p-3 text-sm text-center'>
+									<strong>
+										{passingGradeLabels.length
+											? passingGradeLabels.join(" / ")
+											: "Not configured"}
+									</strong>
+								</div>
+							</label>}
 						</div>
 						{!isCompetencyClass && !reportHasSettings && (
 							<p className='mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700'>
@@ -1461,8 +1692,9 @@ export default function PupilDetails({
 							</p>
 						)}
 						<p className='mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700'>
-							Academic results are based on the latest E-Class Records provided
-							and released by DepEd.
+							{classRecord.grade_level === 1
+								? "Grade 1 progress is descriptive and competency-based; numeric and letter grades are not used as subject grades."
+								: "Academic results are based on the latest E-Class Records provided and released by DepEd."}
 						</p>
 						{!student.parent_guardian_email && (
 							<p className='mt-4 rounded-lg border border-muted bg-muted/40 p-3 text-sm text-muted-foreground'>
@@ -1485,6 +1717,70 @@ export default function PupilDetails({
 							>
 								{reportSendMessage}
 							</p>
+						)}
+						{classRecord.grade_level === 1 && (
+							<div className='mt-6 space-y-6'>
+								<section className='rounded-xl border bg-muted/10 p-5'>
+									<p className='text-center text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground'>
+										Republic of the Philippines · Department of Education
+									</p>
+									<h3 className='mt-2 text-center text-xl font-bold tracking-wide'>
+										Learner&apos;s Progress Report Card
+									</h3>
+									<p className='mt-1 text-center text-sm text-muted-foreground'>
+										School Year {classRecord.school_year}
+									</p>
+									<div className='mt-5 grid gap-3 rounded-lg border bg-card p-4 sm:grid-cols-2'>
+										<p><span className='text-muted-foreground'>Name:</span> <strong>{student.last_name}, {student.first_name}</strong></p>
+										<p><span className='text-muted-foreground'>LRN / Student no.:</span> <strong>{student.student_number}</strong></p>
+										<p><span className='text-muted-foreground'>Grade / Section:</span> <strong>Grade 1 · {classRecord.section_name}</strong></p>
+										<p><span className='text-muted-foreground'>Parent / Guardian:</span> <strong>{student.parent_guardian_name || "—"}</strong></p>
+									</div>
+									<p className='mt-4 text-sm leading-6 text-muted-foreground'>
+										This report provides a descriptive account of your child&apos;s learning progress for each term. It highlights what your child can already do, what they are currently developing, and how they can be further supported.
+									</p>
+									<p className='mt-2 text-sm leading-6 text-muted-foreground'>
+										This report is based on varied evidence of learning, including classroom activities, observations, learner outputs, and assessments. It is designed to give a clearer understanding of your child&apos;s development rather than relying on numerical or letter grades.
+									</p>
+								</section>
+
+								<section className='space-y-3'>
+									<h3 className='font-semibold'>Term narratives</h3>
+									{reportNarratives.map(({ term, report }) => (
+										<article key={term} className='overflow-hidden rounded-xl border'>
+											<h4 className='bg-primary/10 px-4 py-3 text-sm font-bold uppercase tracking-wide'>{term}</h4>
+											<div className='grid md:grid-cols-2'>
+												<div className='border-b p-4 md:border-b-0 md:border-r'>
+													<h5 className='text-sm font-semibold'>What Your Child Can Do <span className='font-normal text-muted-foreground'>(Mga Nagagawa)</span></h5>
+													<p className='mt-2 min-h-16 whitespace-pre-wrap text-sm leading-6 text-muted-foreground'>{report?.what_child_can_do || "No term narrative recorded."}</p>
+												</div>
+												<div className='p-4'>
+													<h5 className='text-sm font-semibold'>What Your Child Is Learning To Improve <span className='font-normal text-muted-foreground'>(Dapat Linangin)</span></h5>
+													<p className='mt-2 min-h-16 whitespace-pre-wrap text-sm leading-6 text-muted-foreground'>{report?.learning_to_improve || "No term narrative recorded."}</p>
+												</div>
+											</div>
+											<div className='border-t px-4 py-3 text-right text-xs text-muted-foreground'>Parent&apos;s / Guardian&apos;s Signature: ______________________________</div>
+										</article>
+									))}
+								</section>
+
+								<section className='overflow-hidden rounded-xl border'>
+									<div className='border-b p-4'>
+										<h3 className='font-semibold'>Attendance record</h3>
+										<p className='mt-1 text-xs text-muted-foreground'>Days recorded are based on saved attendance entries. Present includes late arrivals; excused entries are excluded from present and absent totals.</p>
+									</div>
+									<div className='overflow-x-auto'>
+										<table className='w-full min-w-[560px] text-left text-sm'>
+											<thead className='bg-muted/40 text-xs uppercase text-muted-foreground'><tr><th className='px-4 py-3'>Month</th><th className='px-4 py-3'>Days recorded</th><th className='px-4 py-3'>Days present</th><th className='px-4 py-3'>Times absent</th></tr></thead>
+											<tbody className='divide-y'>
+												{gradeOneAttendanceMonths.map((month) => <tr key={month.name}><td className='px-4 py-2.5 font-medium'>{month.name}</td><td className='px-4 py-2.5'>{month.daysRecorded || "—"}</td><td className='px-4 py-2.5'>{month.daysRecorded ? month.present : "—"}</td><td className='px-4 py-2.5'>{month.daysRecorded ? month.absent : "—"}</td></tr>)}
+											</tbody>
+											<tfoot className='border-t bg-muted/20 font-semibold'><tr><td className='px-4 py-3'>Total</td><td className='px-4 py-3'>{gradeOneAttendanceTotals.daysRecorded}</td><td className='px-4 py-3'>{gradeOneAttendanceTotals.present}</td><td className='px-4 py-3'>{gradeOneAttendanceTotals.absent}</td></tr></tfoot>
+										</table>
+									</div>
+								</section>
+
+							</div>
 						)}
 						{!isCompetencyClass && reportSubject && (
 							<div className='mt-6 overflow-x-auto'>
@@ -1558,7 +1854,7 @@ export default function PupilDetails({
 								</table>
 							</div>
 						)}
-						{isCompetencyClass && reportSubject && (
+						{classRecord.grade_level === 0 && reportSubject && (
 							<section className='mt-6 overflow-x-auto rounded-lg border'>
 								<table className='w-full text-left text-sm'>
 									<thead className='border-b bg-muted/30 text-xs uppercase text-muted-foreground'>
@@ -1573,10 +1869,7 @@ export default function PupilDetails({
 										{reportProgressRows.map((record) => (
 											<tr key={record.id}>
 												<td className='px-3 py-3'>
-													{periodLabelForSchoolYear(
-														record.grading_period,
-														classRecord.school_year,
-													)}
+													{periodLabelForSchoolYear(record.grading_period, classRecord.school_year)}
 												</td>
 												<td className='px-3 py-3'>{record.competency}</td>
 												<td className='px-3 py-3 font-medium'>

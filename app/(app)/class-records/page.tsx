@@ -10,13 +10,13 @@ import { DEFAULT_PAGE_SIZE, Pagination } from "@/components/ui/pagination"
 import { matchesPupilGender, PupilGenderFilter, sortPupilsAlphabetically, type PupilGenderFilterValue } from "@/components/pupils/gender-filter"
 import { calculateGrade, type GradingPolicy } from "@/lib/grading-engine"
 import { buildClassRecordCsv, downloadClassRecordWorkbook, downloadCsv, type ExportAssessment, type ExportRow } from "@/lib/class-records-export"
-import { academicCategories as categories, categoryWeightsFor, gradeLevelLabel, normalizeCategoryWeights, periodKeyForSchoolYear, periodOptionsForSchoolYear, periodsForSchoolYear, type CategoryWeights } from "@/lib/academic-structure"
+import { academicCategories as categories, categoryWeightsFor, earlyLearningPolicies, gradeLevelLabel, gradeOnePaceCompetenciesForSubject, gradingPeriodsForGrade, periodKeyForSchoolYear, type CategoryWeights } from "@/lib/academic-structure"
 
 const supabase = createClient()
 const fallbackCategory = (type: string) => (["Project", "Performance Task", "Performance Tasks", "Product/Performance Tasks", "Product / Performance Tasks"].includes(type) ? "Product/Performance Tasks" : ["Quarterly Exam", "Quarterly Examination", "Periodic Examination", "Quarterly Assessment", "Examinations"].includes(type) ? "Examinations" : "Written/Oral Works")
 
 const fetcher = async () => {
-  const [classes, subjects, periods, students, enrollments, assessments, scores, configs, settings, competencies] = await Promise.all([
+  const [classes, subjects, periods, students, enrollments, assessments, scores, configs, settings, competencies, reports] = await Promise.all([
     supabase.from("classes").select("id,grade_level,section_name,school_year,subject_name").eq("is_active", true).order("grade_level").order("section_name"),
     supabase.from("class_subjects").select("id,class_id,subject_name").eq("is_active", true).order("subject_name"),
     supabase.from("grading_periods").select("short_label,display_name,quarter_number,school_year").order("quarter_number"),
@@ -27,9 +27,10 @@ const fetcher = async () => {
     supabase.from("class_grading_configurations").select("class_subject_id,school_year,grading_period,written_work_weight,performance_tasks_weight,quarterly_exam_weight,passing_grade,decimal_places,rounding_method").eq("is_active", true),
     supabase.from("grading_settings").select("passing_grade,decimal_places,rounding_method,grading_weights").is("grade_level", null).eq("subject_name", "").order("updated_at", { ascending: false }).limit(1).maybeSingle(),
     supabase.from("competency_records").select("id,class_id,student_id,subject_offering_id,grading_period,competency,rating"),
+    supabase.from("early_learning_reports").select("id,class_id,student_id,school_year,grading_period,what_child_can_do,learning_to_improve,teacher_comments"),
   ])
-  for (const result of [classes, subjects, periods, students, enrollments, assessments, scores, configs, settings, competencies]) if (result.error) throw new Error(result.error.message)
-  return { classes: classes.data ?? [], subjects: subjects.data ?? [], periods: periods.data ?? [], students: students.data ?? [], enrollments: enrollments.data ?? [], assessments: assessments.data ?? [], scores: scores.data ?? [], configs: configs.data ?? [], settings: settings.data, competencies: competencies.data ?? [] }
+  for (const result of [classes, subjects, periods, students, enrollments, assessments, scores, configs, settings, competencies, reports]) if (result.error) throw new Error(result.error.message)
+  return { classes: classes.data ?? [], subjects: subjects.data ?? [], periods: periods.data ?? [], students: students.data ?? [], enrollments: enrollments.data ?? [], assessments: assessments.data ?? [], scores: scores.data ?? [], configs: configs.data ?? [], settings: settings.data, competencies: competencies.data ?? [], reports: reports.data ?? [] }
 }
 
 type RecordRow = ExportRow & { studentId: string; gender: string | null }
@@ -92,7 +93,7 @@ export default function ClassRecordsPage() {
   const subjects = (data?.subjects ?? []).filter((item) => item.class_id === selectedClass?.id)
   const selectedSubject = subjects.find((item) => item.id === subjectId) ?? subjects[0]
   const storedPeriods = data?.periods?.filter((item) => !selectedClass?.school_year || item.school_year === selectedClass.school_year) ?? []
-  const periods = periodOptionsForSchoolYear(selectedClass?.school_year, storedPeriods)
+  const periods = gradingPeriodsForGrade(selectedClass?.grade_level, selectedClass?.school_year, storedPeriods)
   const selectedPeriod = period || periods[0]?.short_label || "T1"
   const activeGradingConfiguration = data?.configs.find((item) =>
     item.class_subject_id === selectedSubject?.id &&
@@ -112,18 +113,29 @@ export default function ClassRecordsPage() {
     item.subject_offering_id === selectedSubject?.id &&
     periodKeyForSchoolYear(item.grading_period, selectedClass?.school_year) === periodKeyForSchoolYear(selectedPeriod, selectedClass?.school_year),
   )
-  const competencyNames = [...new Set(competencyRecords.map((item) => item.competency))].sort((a, b) => a.localeCompare(b))
+  const paceCompetencies = selectedClass?.grade_level === 1
+    ? gradeOnePaceCompetenciesForSubject(selectedSubject?.subject_name, selectedPeriod)
+    : []
+  const competencyNames = [...new Set([
+    ...paceCompetencies,
+    ...competencyRecords.map((item) => item.competency).filter((name) => !paceCompetencies.includes(name)),
+  ])]
   const competencyPupils = sortPupilsAlphabetically((data?.students ?? []).filter((student) =>
     student.class_id === selectedClass?.id &&
     (data?.enrollments ?? []).some((enrollment) => enrollment.class_id === selectedClass?.id && enrollment.student_id === student.id),
   ))
+  const termReports = (data?.reports ?? []).filter((report) =>
+    report.class_id === selectedClass?.id &&
+    report.school_year === selectedClass?.school_year &&
+    report.grading_period === selectedPeriod,
+  )
 
   const prepared = useMemo(() => {
     if (!selectedClass || selectedClass.grade_level <= 1 || !selectedSubject || !data) return null
     const configFor = (periodValue: string): GradingPolicy => { const config = data.configs.find((item) => item.class_subject_id === selectedSubject.id && item.school_year === selectedClass.school_year && periodKeyForSchoolYear(item.grading_period, selectedClass.school_year) === periodKeyForSchoolYear(periodValue, selectedClass.school_year)); return config ? { passingGrade: Number(config.passing_grade), decimalPlaces: Number(config.decimal_places), roundingMethod: config.rounding_method as GradingPolicy["roundingMethod"], useTransmutation: Number(selectedClass.school_year.match(/\d{4}/)?.[0]) >= 2026, weights: { "Written/Oral Works": Number(config.written_work_weight), "Product/Performance Tasks": Number(config.performance_tasks_weight), Examinations: Number(config.quarterly_exam_weight) } } : { passingGrade: 75, decimalPlaces: 2, roundingMethod: "half_up", useTransmutation: Number(selectedClass.school_year.match(/\d{4}/)?.[0]) >= 2026, weights: categoryWeightsFor(selectedClass.grade_level, selectedSubject.subject_name) } }
     const pupils = sortPupilsAlphabetically(data.students.filter((student) => student.class_id === selectedClass.id && data.enrollments.some((item) => item.class_id === selectedClass.id && item.student_id === student.id)))
     const buildRows = (periodValue: string): { rows: RecordRow[]; assessments: ExportAssessment[] } => { const normalizedPeriod = periodKeyForSchoolYear(periodValue, selectedClass.school_year); const assessments = data.assessments.filter((item) => item.class_id === selectedClass.id && item.subject === selectedSubject.subject_name && periodKeyForSchoolYear(item.grading_period, selectedClass.school_year) === normalizedPeriod && item.school_year === selectedClass.school_year); const exportAssessments = assessments.map((item) => ({ id: item.id, title: item.title, category: item.grading_category ? fallbackCategory(item.grading_category) : fallbackCategory(item.assessment_type), totalPoints: Number(item.total_points), assessmentDate: item.activity_date || item.assessment_date })); const rows = pupils.map((student) => { const result = calculateGrade(student.id, assessments.map((item) => ({ id: item.id, assessmentType: item.assessment_type, gradingCategory: item.grading_category, gradingPeriod: periodKeyForSchoolYear(item.grading_period, selectedClass.school_year) ?? item.grading_period, subject: item.subject, totalPoints: Number(item.total_points) })), data.scores.map((score) => ({ assessmentId: score.assessment_id, studentId: score.student_id, score: score.score === null ? null : Number(score.score) })), configFor(periodValue), selectedSubject.subject_name, normalizedPeriod ?? undefined); return { studentId: student.id, studentNumber: student.student_number, learnerName: `${student.last_name}, ${student.first_name}`, gender: student.gender, scores: Object.fromEntries(assessments.map((item) => [item.id, data.scores.find((score) => score.assessment_id === item.id && score.student_id === student.id)?.score ?? null])), componentPercentages: Object.fromEntries(result.categories.map((category) => [category.name, category.average])), initialGrade: result.weightedPercentage, termGrade: result.transmutedGrade, descriptor: result.descriptor, status: result.remark, categories: Object.fromEntries(result.categories.map((category) => [category.name, { rawRecorded: category.rawRecorded, rawTotal: category.rawTotal, average: category.average, contribution: category.contribution }])) } }); return { rows, assessments: exportAssessments } }
-    const current = buildRows(selectedPeriod); const summary = pupils.map((student) => { const periodGrades = periodsForSchoolYear(selectedClass.school_year).map((item) => { const periodRows = buildRows(item.key).rows.find((row) => row.studentId === student.id); return { label: item.key, grade: periodRows?.termGrade ?? null, status: periodRows?.status ?? "Incomplete" } }); return { ...student, periodGrades } }); return { ...current, summary }
+    const current = buildRows(selectedPeriod); const summary = pupils.map((student) => { const periodGrades = periods.map((item) => { const periodRows = buildRows(item.short_label).rows.find((row) => row.studentId === student.id); return { label: item.short_label, grade: periodRows?.termGrade ?? null, status: periodRows?.status ?? "Incomplete" } }); return { ...student, periodGrades } }); return { ...current, summary }
   }, [data, selectedClass, selectedSubject, selectedPeriod, periods])
 
   const topTenIds = new Set((prepared?.rows ?? []).filter((row) => row.termGrade !== null).sort((a, b) => (b.termGrade ?? 0) - (a.termGrade ?? 0) || a.learnerName.localeCompare(b.learnerName)).slice(0, 10).map((row) => row.studentId))
@@ -144,7 +156,7 @@ export default function ClassRecordsPage() {
         <div>
           <Link href="/classes" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="size-4" />Classes</Link>
           <h1 className="mt-3 text-3xl font-semibold tracking-tight">Class Records</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Assessment scores and grades calculated from raw points and saved class policies.</p>
+          <p className="mt-2 text-sm text-muted-foreground">{isProgressClass ? "View term-based competency ratings for Kinder and Grade 1. Grade 1 uses its PACE A–E scale without numeric grades or transmutation." : "Assessment scores and grades calculated from raw points and saved class policies."}</p>
         </div>
         {!isProgressClass && <div className="relative">
           <Button variant="outline" onClick={() => setExportOpen(!exportOpen)} disabled={!prepared}><ArrowDownToLine data-icon="inline-start" />Export <ChevronDown data-icon="inline-end" /></Button>
@@ -171,7 +183,7 @@ export default function ClassRecordsPage() {
         <h2 className="mt-1 text-2xl font-semibold">{selectedSubject?.subject_name ?? "Choose a subject"}</h2>
         <p className="mt-1 text-sm text-muted-foreground">{selectedClass?.school_year} · {view === "summary" ? "Term Summary" : periods.find((item) => item.short_label === selectedPeriod)?.display_name ?? selectedPeriod}</p>
       </section>
-      {isProgressClass ? <CompetencyRecordTable pupils={competencyPupils} competencyNames={competencyNames} records={competencyRecords} classId={selectedClass?.id ?? ""} /> : view === "period" ? <section className="overflow-hidden rounded-xl border bg-card">
+      {isProgressClass ? <CompetencyRecordTable key={`${selectedClass.id}:${selectedSubject?.id ?? ""}:${selectedPeriod}`} pupils={competencyPupils} competencyNames={competencyNames} records={competencyRecords} reports={termReports} classId={selectedClass.id} subjectId={selectedSubject?.id ?? ""} period={selectedPeriod} gradeLevel={selectedClass.grade_level} subjectName={selectedSubject?.subject_name ?? ""} termName={periods.find((item) => item.short_label === selectedPeriod)?.display_name ?? selectedPeriod} /> : view === "period" ? <section className="overflow-hidden rounded-xl border bg-card">
         <div className="flex flex-wrap items-end justify-between gap-3 border-b p-4">
           <div>
             <h3 className="font-semibold">{periods.find((item) => item.short_label === selectedPeriod)?.display_name ?? selectedPeriod} class record</h3>
@@ -267,19 +279,54 @@ function SummaryTable({ summary, periods, search, genderFilter, onGenderChange }
   </section>
 }
 
-function CompetencyRecordTable({ pupils, competencyNames, records, classId }: {
+function CompetencyRecordTable({ pupils, competencyNames, records, reports, classId, subjectId, period, gradeLevel, subjectName, termName }: {
   pupils: Array<{ id: string; student_number: string; first_name: string; last_name: string }>
   competencyNames: string[]
   records: Array<{ student_id: string; competency: string; rating: string }>
+  reports: Array<{ student_id: string; what_child_can_do: string; learning_to_improve: string; teacher_comments: string }>
   classId: string
+  subjectId: string
+  period: string
+  gradeLevel: number
+  subjectName: string
+  termName: string
 }) {
   const [page, setPage] = useState(1)
   const pagePupils = pupils.slice((page - 1) * DEFAULT_PAGE_SIZE, page * DEFAULT_PAGE_SIZE)
+  if (gradeLevel === 1) {
+    return <section className="overflow-hidden rounded-xl border bg-card">
+      <div className="flex flex-col gap-2 border-b p-4">
+        <div>
+          <h3 className="font-semibold">Grade 1 pupils · {subjectName}</h3>
+          <p className="text-sm text-muted-foreground">{termName} · Open a pupil to enter or update their PACE ratings and term narrative. PACE uses A–E ratings; numeric grades do not apply.</p>
+        </div>
+      </div>
+      {pupils.length ? <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] text-left text-sm">
+          <thead className="bg-primary text-xs text-primary-foreground"><tr><th className="px-4 py-3">Pupil</th><th className="px-4 py-3">Student number</th><th className="px-4 py-3">PACE progress</th><th className="px-4 py-3">Term narrative</th><th className="px-4 py-3 text-right">Action</th></tr></thead>
+          <tbody className="divide-y">{pagePupils.map((pupil) => {
+            const ratedCount = competencyNames.filter((name) => records.some((record) => record.student_id === pupil.id && record.competency === name)).length
+            const report = reports.find((item) => item.student_id === pupil.id)
+            const hasNarrative = Boolean(report?.what_child_can_do.trim() || report?.learning_to_improve.trim())
+            const editHref = `/competency-records?classId=${encodeURIComponent(classId)}&subjectId=${encodeURIComponent(subjectId)}&studentId=${encodeURIComponent(pupil.id)}&period=${encodeURIComponent(period)}`
+            return <tr key={pupil.id} className="hover:bg-muted/30">
+              <td className="px-4 py-3 font-medium">{pupil.last_name}, {pupil.first_name}</td>
+              <td className="px-4 py-3 text-muted-foreground">{pupil.student_number}</td>
+              <td className="px-4 py-3">{ratedCount} / {competencyNames.length} competencies rated</td>
+              <td className="px-4 py-3">{hasNarrative ? <span className="text-primary">Entered</span> : <span className="text-muted-foreground">Not entered</span>}</td>
+              <td className="px-4 py-3 text-right"><Link href={editHref} className="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-accent hover:text-accent-foreground">View / Edit</Link></td>
+            </tr>
+          })}</tbody>
+        </table>
+      </div> : <p className="p-8 text-center text-sm text-muted-foreground">There are no enrolled pupils in this class.</p>}
+      <Pagination page={page} totalItems={pupils.length} onPageChange={setPage} />
+    </section>
+  }
   return <section className="overflow-hidden rounded-xl border bg-card">
     <div className="flex flex-col justify-between gap-3 border-b p-4 sm:flex-row sm:items-center">
       <div>
-        <h3 className="font-semibold">Competency progress record</h3>
-        <p className="mt-1 text-sm text-muted-foreground">Categorical progress only; no numeric grade or transmutation is applied.</p>
+        <h3 className="font-semibold">{earlyLearningPolicies[gradeLevel as 0 | 1].name}</h3>
+        <p className="mt-1 text-sm text-muted-foreground">{earlyLearningPolicies[gradeLevel as 0 | 1].description}</p>
       </div>
       <Link href="/competency-records" className="text-sm font-medium text-primary hover:underline">Manage competencies</Link>
     </div>
@@ -287,7 +334,11 @@ function CompetencyRecordTable({ pupils, competencyNames, records, classId }: {
       <thead className="bg-primary text-xs text-primary-foreground"><tr><th className="sticky left-0 bg-primary px-4 py-3 text-primary-foreground">Pupil</th>{competencyNames.map((name) => <th key={name} className="px-4 py-3">{name}</th>)}</tr></thead>
       <tbody className="divide-y">{pagePupils.map((student) => <tr key={student.id}>
         <td className="sticky left-0 bg-card px-4 py-3"><p className="font-medium">{student.last_name}, {student.first_name}</p><p className="text-xs text-muted-foreground">{student.student_number}</p></td>
-        {competencyNames.map((name) => <td key={name} className="px-4 py-3 text-center font-medium">{records.find((record) => record.student_id === student.id && record.competency === name)?.rating ?? "—"}</td>)}
+        {competencyNames.map((name) => {
+          const rating = records.find((record) => record.student_id === student.id && record.competency === name)?.rating
+          const descriptor = earlyLearningPolicies[gradeLevel as 0 | 1].ratings.find((item) => item.value === rating)
+          return <td key={name} className="px-4 py-3 text-center font-medium" title={descriptor?.description}>{rating ? `${rating} — ${descriptor?.label ?? "Unknown rating"}` : "—"}</td>
+        })}
       </tr>)}</tbody>
     </table></div><Pagination page={page} totalItems={pupils.length} onPageChange={setPage} /></> : <p className="p-8 text-center text-sm text-muted-foreground">No competency ratings are recorded for this learning area and term.</p>}
   </section>

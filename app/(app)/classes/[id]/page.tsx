@@ -8,18 +8,19 @@ import { ArrowLeft, BookOpen, CalendarDays, Search, Users, Plus, Trash2, FileSpr
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { matchesPupilGender, PupilGenderFilter, sortPupilsAlphabetically, type PupilGenderFilterValue } from "@/components/pupils/gender-filter"
-import { categoryWeightsFor, gradeLevelLabel, periodOptionsForSchoolYear, subjectsForGrade } from "@/lib/academic-structure"
+import { categoryWeightsFor, gradeLevelLabel, gradingPeriodsForGrade, subjectsForGrade } from "@/lib/academic-structure"
 
 const supabase = createClient()
 const fetcher = async (id: string) => {
   const [classResult, subjects, enrollments, students] = await Promise.all([
     supabase.from("classes").select("id,grade_level,section_name,school_year,room,subject_name").eq("id", id).single(),
-    supabase.from("class_subjects").select("id,subject_name,teacher_name,day_of_week,start_time,end_time,room,is_active").eq("class_id", id).eq("is_active", true).order("subject_name"),
+    supabase.from("class_subjects").select("id,subject_name,teacher_name,day_of_week,start_time,end_time,room,is_active").eq("class_id", id).order("subject_name"),
     supabase.from("class_enrollments").select("id,student_id,status,enrolled_on").eq("class_id", id).eq("status", "active"),
     supabase.from("students").select("id,student_number,first_name,last_name,class_id,gender").eq("is_active", true).order("last_name").order("first_name"),
   ])
   for (const result of [classResult, subjects, enrollments, students]) if (result.error) throw new Error(result.error.message)
-  return { classRecord: classResult.data, subjects: subjects.data ?? [], enrollments: enrollments.data ?? [], students: students.data ?? [] }
+  const allSubjects = subjects.data ?? []
+  return { classRecord: classResult.data, subjects: allSubjects.filter((item) => item.is_active), archivedSubjects: allSubjects.filter((item) => !item.is_active), enrollments: enrollments.data ?? [], students: students.data ?? [] }
 }
 
 export default function ClassWorkspacePage() {
@@ -39,6 +40,7 @@ export default function ClassWorkspacePage() {
   if (error || !data?.classRecord) return <main className="mx-auto max-w-7xl p-6"><p className="text-sm text-destructive">Unable to load this class.</p><Link href="/classes" className="mt-3 inline-flex text-sm text-primary hover:underline">Back to classes</Link></main>
   const classRecord = data.classRecord
   const classSubjects = data.subjects
+  const archivedSubjects = data.archivedSubjects
   const enrolledIds = new Set(data.enrollments.map((row) => row.student_id))
   const enrolledPupils = data.students.filter((student) => enrolledIds.has(student.id))
   const pupils = sortPupilsAlphabetically(data.students.filter((student) => enrolledIds.has(student.id) && matchesPupilGender(student.gender, genderFilter)))
@@ -78,38 +80,85 @@ export default function ClassWorkspacePage() {
   }
   async function addSubject() {
     if (!subjectsForGrade(classRecord.grade_level).includes(subject) || classSubjects.some((item) => item.subject_name === subject)) return
-    const { data: auth } = await supabase.auth.getUser()
-    if (!auth.user) return
+    const { data: auth, error: authError } = await supabase.auth.getUser()
+    if (authError || !auth.user) {
+      setScheduleMessage(authError?.message ?? "Please sign in again before adding a subject.")
+      return
+    }
     setSaving(true)
-    const { data: offering, error: saveError } = await supabase.from("class_subjects")
-      .insert({ teacher_id: auth.user.id, class_id: classRecord.id, subject_name: subject, room: classRecord.room })
-      .select("id,subject_name")
-      .single()
+    const archivedOffering = archivedSubjects.find((item) => item.subject_name === subject)
+    const { data: offering, error: saveError } = archivedOffering
+      ? await supabase.from("class_subjects")
+          .update({ is_active: true })
+          .eq("id", archivedOffering.id)
+          .eq("teacher_id", auth.user.id)
+          .eq("class_id", classRecord.id)
+          .select("id,subject_name")
+          .single()
+      : await supabase.from("class_subjects")
+          .insert({ teacher_id: auth.user.id, class_id: classRecord.id, subject_name: subject, room: classRecord.room })
+          .select("id,subject_name")
+          .single()
     if (saveError || !offering) {
       setScheduleMessage(saveError?.message ?? "Subject could not be added.")
     } else {
-      const weights = categoryWeightsFor(classRecord.grade_level, offering.subject_name)
-      const defaultPolicies = periodOptionsForSchoolYear(classRecord.school_year).map((item) => ({
-        teacher_id: auth.user.id,
-        class_subject_id: offering.id,
-        school_year: classRecord.school_year,
-        grading_period: item.short_label,
-        written_work_weight: weights["Written/Oral Works"],
-        performance_tasks_weight: weights["Product/Performance Tasks"],
-        quarterly_exam_weight: weights.Examinations,
-        passing_grade: 75,
-        decimal_places: 2,
-        rounding_method: "half_up",
-        is_active: true,
-      }))
-      const { error: policyError } = await supabase.from("class_grading_configurations").insert(defaultPolicies)
-      setScheduleMessage(policyError ? `Subject added, but default grading policies could not be created: ${policyError.message}` : "Subject added with default grading policies for every period.")
+      if (classRecord.grade_level <= 1) {
+        setScheduleMessage(archivedOffering ? "Subject restored. Its existing competency records are available again." : "Subject added. Use the template-aligned competency ratings; no numeric grading policy applies to Kinder or Grade 1.")
+        setSubject("")
+        await mutate()
+        setSaving(false)
+        return
+      }
+      const { data: existingPolicies, error: policyQueryError } = await supabase.from("class_grading_configurations")
+        .select("class_subject_id")
+        .eq("class_subject_id", offering.id)
+        .eq("school_year", classRecord.school_year)
+      if (policyQueryError) {
+        setScheduleMessage(`Subject ${archivedOffering ? "restored" : "added"}, but existing grading policies could not be checked: ${policyQueryError.message}`)
+      } else if (existingPolicies?.length) {
+        setScheduleMessage(archivedOffering ? "Subject restored with its existing grading policies." : "Subject added. Existing grading policies were kept.")
+      } else {
+        const weights = categoryWeightsFor(classRecord.grade_level, offering.subject_name)
+        const defaultPolicies = gradingPeriodsForGrade(classRecord.grade_level, classRecord.school_year).map((item) => ({
+          teacher_id: auth.user.id,
+          class_subject_id: offering.id,
+          school_year: classRecord.school_year,
+          grading_period: item.short_label,
+          written_work_weight: weights["Written/Oral Works"],
+          performance_tasks_weight: weights["Product/Performance Tasks"],
+          quarterly_exam_weight: weights.Examinations,
+          passing_grade: 75,
+          decimal_places: 2,
+          rounding_method: "half_up",
+          is_active: true,
+        }))
+        const { error: policyError } = await supabase.from("class_grading_configurations").insert(defaultPolicies)
+        setScheduleMessage(policyError ? `Subject ${archivedOffering ? "restored" : "added"}, but default grading policies could not be created: ${policyError.message}` : archivedOffering ? "Subject restored and its default grading policies were created." : "Subject added with default grading policies for every period.")
+      }
       setSubject("")
       await mutate()
     }
     setSaving(false)
   }
-  async function removeSubject(id: string) { await supabase.from("class_subjects").update({ is_active: false }).eq("id", id); await mutate() }
+  async function removeSubject(id: string) {
+    const { data: auth, error: authError } = await supabase.auth.getUser()
+    if (authError || !auth.user) {
+      setScheduleMessage(authError?.message ?? "Please sign in again before removing a subject.")
+      return
+    }
+    setSaving(true)
+    const { error: removeError } = await supabase.from("class_subjects")
+      .update({ is_active: false })
+      .eq("id", id)
+      .eq("teacher_id", auth.user.id)
+      .eq("class_id", classRecord.id)
+    setSaving(false)
+    if (removeError) setScheduleMessage(`Subject could not be removed: ${removeError.message}`)
+    else {
+      setScheduleMessage("Subject removed from the active class list. Its records are preserved and can be restored.")
+      await mutate()
+    }
+  }
   async function setEnrollment(studentId: string, active: boolean) { const { data: auth } = await supabase.auth.getUser(); if (!auth.user) return; if (active) await supabase.from("class_enrollments").insert({ teacher_id: auth.user.id, class_id: classRecord.id, student_id: studentId }); else await supabase.from("class_enrollments").update({ status: "withdrawn" }).eq("class_id", classRecord.id).eq("student_id", studentId); await mutate() }
 
   return <main className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">

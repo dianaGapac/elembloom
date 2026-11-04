@@ -31,7 +31,8 @@ import {
 	sortPupilsAlphabetically,
 	type PupilGenderFilterValue,
 } from "@/components/pupils/gender-filter";
-import { periodOptionsForSchoolYear } from "@/lib/academic-structure";
+import { periodKeyForSchoolYear, periodOptionsForSchoolYear } from "@/lib/academic-structure";
+import { DistributionChart, TrendChart } from "@/components/ui/trend-chart";
 
 type Student = RiskStudent & {
 	student_number: string;
@@ -357,6 +358,40 @@ export default function RiskAssessmentPage() {
 				),
 		[students, data, schoolYear, period],
 	);
+	const assessmentTrend = useMemo(() => {
+		if (!data || !rows.length) return [];
+		const visibleStudentIds = new Set(rows.map(({ student }) => student.id));
+		const visibleClassIds = new Set(rows.map(({ student }) => student.class_id));
+		const matchingAssessments = data.assessments.filter((assessment) => {
+			const classRecord = classes.find((item) => item.id === assessment.class_id);
+			return visibleClassIds.has(assessment.class_id)
+				&& (!schoolYear || classRecord?.school_year === schoolYear)
+				&& (!period || periodKeyForSchoolYear(assessment.grading_period, classRecord?.school_year) === period);
+		});
+		const byDate = new Map<string, number[]>();
+		for (const assessment of matchingAssessments) {
+			const assessmentScores = data.scores
+				.filter((score) => score.assessment_id === assessment.id && visibleStudentIds.has(score.student_id))
+				.reduce((latest, score) => {
+					const current = latest.get(score.student_id);
+					if (!current || String(score.updated_at ?? "").localeCompare(String(current.updated_at ?? "")) > 0) {
+						latest.set(score.student_id, score);
+					}
+					return latest;
+				}, new Map<string, (typeof data.scores)[number]>());
+			const percentages = [...assessmentScores.values()]
+				.filter((score) => score.score !== null && assessment.total_points > 0)
+				.map((score) => (Number(score.score) / Number(assessment.total_points)) * 100)
+				.filter(Number.isFinite);
+			if (percentages.length) byDate.set(assessment.assessment_date, [...(byDate.get(assessment.assessment_date) ?? []), ...percentages]);
+		}
+		return [...byDate.entries()]
+			.sort(([dateA], [dateB]) => dateA.localeCompare(dateB))
+			.map(([date, values]) => ({
+				label: date,
+				value: values.reduce((sum, value) => sum + value, 0) / values.length,
+			}));
+	}, [data, rows, classes, schoolYear, period]);
 	const selectedRisk =
 		selected && data
 			? classifyRisk(
@@ -368,6 +403,10 @@ export default function RiskAssessmentPage() {
 					schoolYear,
 					period,
 				)
+			: null;
+	const selectedThresholds =
+		selected && data
+			? riskSettingsForStudent(selected, data, schoolYear)
 			: null;
 	if (isLoading)
 		return (
@@ -435,6 +474,18 @@ export default function RiskAssessmentPage() {
 						<p className='mt-3 text-3xl font-bold'>{summary[key]}</p>
 					</div>
 				))}
+			</div>
+			<div className='grid gap-4 lg:grid-cols-[2fr_1fr]'>
+				<TrendChart title='Assessment performance trend' points={assessmentTrend} />
+				<DistributionChart
+					title='Risk-level distribution (all pupils)'
+					items={[
+						{ label: "High risk", count: summary.high, color: "bg-destructive" },
+						{ label: "Moderate risk", count: summary.moderate, color: "bg-amber-500" },
+						{ label: "Low risk", count: summary.low, color: "bg-emerald-500" },
+						{ label: "Incomplete data", count: summary.incomplete, color: "bg-sky-500" },
+					]}
+				/>
 			</div>
 			<div className='rounded-xl border bg-card p-4'>
 				<div className='flex flex-wrap gap-3'>
@@ -887,6 +938,53 @@ export default function RiskAssessmentPage() {
 									{selectedRisk.absences}
 								</p>
 							</div>
+						</div>
+						<div className='mt-6 rounded-xl border bg-muted/20 p-4'>
+							<div className='flex flex-wrap items-start justify-between gap-3'>
+								<div>
+									<h3 className='font-semibold'>How this risk value is computed</h3>
+									<p className='mt-1 text-sm text-muted-foreground'>
+										Assessment percentages use each latest score ÷ total points × 100; the
+										average is the mean of recorded percentages. Failed assessments are
+										below their own passing marks. Attendance rate is (non-excused
+										records − absences) ÷ non-excused records. Each triggered rule below
+										adds its points.
+									</p>
+								</div>
+								<div className='text-right'>
+									<p className='text-lg font-semibold tabular-nums'>
+										{selectedRisk.totalPoints} points
+									</p>
+									<p className='text-xs text-muted-foreground'>
+										Academic {selectedRisk.academicPoints} + Attendance {selectedRisk.attendancePoints}
+									</p>
+								</div>
+							</div>
+							<ul className='mt-4 divide-y rounded-lg border bg-background'>
+								{selectedRisk.scoreBreakdown.map((item) => (
+									<li
+										key={item.label}
+										className='flex items-start justify-between gap-4 p-3 text-sm'
+									>
+										<div>
+											<p className='font-medium'>{item.label}</p>
+											<p className='mt-0.5 text-xs text-muted-foreground'>
+												{item.area} · {item.detail}
+											</p>
+										</div>
+										<span className='shrink-0 font-semibold tabular-nums'>
+											{item.points > 0 ? `+${item.points}` : "0"} pts
+										</span>
+									</li>
+								))}
+							</ul>
+							{selectedThresholds && (
+								<p className='mt-3 text-xs text-muted-foreground'>
+									{selectedRisk.level === "incomplete"
+										? "The level is incomplete until both assessment scores and attendance records are available. Missing data is not counted as zero."
+										: `Level thresholds: High at ${selectedThresholds.high_risk_score}+ points; Moderate at ${selectedThresholds.moderate_risk_score}+ points; Low below ${selectedThresholds.moderate_risk_score} points.`}
+								</p>
+							)}
 						</div>
 						<div className='mt-6 grid gap-5 sm:grid-cols-2'>
 							<div>

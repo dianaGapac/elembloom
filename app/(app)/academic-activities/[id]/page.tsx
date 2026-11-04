@@ -7,7 +7,7 @@ import { ArrowLeft, CalendarDays, CheckCircle2, ClipboardList, Edit3, FileText, 
 import { useState } from "react"
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
-import { academicCategories, gradeLevelLabel, normalizePeriod, periodKeyForSchoolYear, periodOptionsForSchoolYear } from "@/lib/academic-structure"
+import { academicCategories, gradeLevelLabel, gradingPeriodsForGrade, periodKeyForSchoolYear } from "@/lib/academic-structure"
 
 const supabase = createClient()
 
@@ -45,7 +45,7 @@ export default function ActivityDetailPage() {
   const [subjectByClass, setSubjectByClass] = useState<Record<string, string>>({})
   if (isLoading) return <main className="mx-auto max-w-5xl p-6"><p className="text-sm text-muted-foreground">Loading activity…</p></main>
   if (error || !data?.activity) return <main className="mx-auto max-w-5xl p-6"><p className="text-sm text-destructive">Unable to load this activity.</p></main>
-  const { activity, assignments, assessments, classes, subjects } = data
+  const { activity, assignments, assessments, classes, subjects, periods } = data
   const passingScore = Number(activity.total_points) * Number(activity.passing_percentage) / 100
   const assignedClassIds = new Set(assignments.map((item) => item.class_id))
   const passSummary = (classId: string, assessmentId: string | null) => {
@@ -57,7 +57,7 @@ export default function ActivityDetailPage() {
     return { pupilCount: pupilIds.size, passedCount, rate: pupilIds.size ? Math.round((passedCount / pupilIds.size) * 100) : null }
   }
   const firstClass = classes.find((item) => item.id === assignments[0]?.class_id) ?? classes.find((item) => item.id === selectedClassIds[0]) ?? classes[0]
-  const gradingPeriods = periodOptionsForSchoolYear(firstClass?.school_year, data.periods.filter((item) => item.school_year === firstClass?.school_year))
+  const gradingPeriods = gradingPeriodsForGrade(firstClass?.grade_level, firstClass?.school_year, periods.filter((item) => item.school_year === firstClass?.school_year))
   const selectedAssignmentPeriod = gradingPeriods.some((item) => item.short_label === assignmentPeriod) ? assignmentPeriod : gradingPeriods[0]?.short_label ?? "T1"
   function openEditor() {
     const firstAssignment = assignments[0]
@@ -75,6 +75,13 @@ export default function ActivityDetailPage() {
     const { data: auth, error: authError } = await supabase.auth.getUser()
     if (authError || !auth.user) { setMessage(authError?.message ?? "Please sign in again."); return }
     if (!assignments.length && !selectedClassIds.length) { setMessage("Assign this activity to at least one class."); return }
+    if ([...assignments.map((item) => item.class_id), ...selectedClassIds].some((classId) => {
+      const classRecord = classes.find((item) => item.id === classId)
+      return classRecord && classRecord.grade_level <= 1
+    })) {
+      setMessage("Kinder and Grade 1 use competency records, not numeric activities. Record Grade 1 progress in the PACE form.")
+      return
+    }
     const activityType = String(form.get("activityType") ?? "")
     const title = String(form.get("title") ?? "").trim()
     const description = String(form.get("description") ?? "").trim() || null
@@ -89,7 +96,8 @@ export default function ActivityDetailPage() {
     if (!gradingPeriods.some((item) => item.short_label === selectedAssignmentPeriod)) { setMessage("Choose a valid grading period."); return }
     if ([...assignments.map((item) => item.class_id), ...selectedClassIds].some((classId) => {
       const classRecord = classes.find((item) => item.id === classId)
-      return classRecord && periodKeyForSchoolYear(selectedAssignmentPeriod, classRecord.school_year) !== selectedAssignmentPeriod
+      return classRecord && !gradingPeriodsForGrade(classRecord.grade_level, classRecord.school_year, periods.filter((period) => period.school_year === classRecord.school_year))
+        .some((period) => period.short_label === selectedAssignmentPeriod)
     })) { setMessage("This activity can only be assigned to classes using the same grading-period structure."); return }
     const assessmentPeriod = selectedAssignmentPeriod
     if (!Number.isFinite(totalPoints) || totalPoints <= 0) { setMessage("Total points must be greater than zero."); return }

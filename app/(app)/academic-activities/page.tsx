@@ -7,7 +7,7 @@ import { BookOpenCheck, CalendarDays, CheckCircle2, ClipboardList, Pencil, Plus,
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { DEFAULT_PAGE_SIZE, Pagination } from "@/components/ui/pagination"
-import { academicCategories, gradeLevelLabel, isTrimesterSchoolYear, periodKeyForSchoolYear, periodLabelForSchoolYear, periodOptionsForSchoolYear } from "@/lib/academic-structure"
+import { academicCategories, gradeLevelLabel, gradingPeriodsForGrade, isTrimesterSchoolYear, periodKeyForSchoolYear, periodLabelForSchoolYear } from "@/lib/academic-structure"
 
 const supabase = createClient()
 const fetcher = async () => {
@@ -50,16 +50,24 @@ export default function AcademicActivitiesPage() {
   })
   const storedPeriods = data?.periods ?? []
   const selectedSchoolYear = classes.find((item) => form.classIds.includes(item.id))?.school_year ?? classes[0]?.school_year
-  const formPeriods = periodOptionsForSchoolYear(selectedSchoolYear, storedPeriods.filter((item) => item.school_year === selectedSchoolYear))
+  const selectedClass = classes.find((item) => form.classIds.includes(item.id)) ?? classes.find((item) => item.school_year === selectedSchoolYear)
+  const formPeriods = gradingPeriodsForGrade(selectedClass?.grade_level, selectedSchoolYear, storedPeriods.filter((item) => item.school_year === selectedSchoolYear))
   const effectiveFormPeriod = formPeriods.some((item) => item.short_label === form.gradingPeriod) ? form.gradingPeriod : formPeriods[0]?.short_label ?? "T1"
-  const allPeriodOptions = [...new Map(classes.flatMap((klass) => periodOptionsForSchoolYear(klass.school_year, storedPeriods.filter((item) => item.school_year === klass.school_year))).map((item) => [item.short_label, item])).values()]
+  const allPeriodOptions = [...new Map(classes.flatMap((klass) => gradingPeriodsForGrade(klass.grade_level, klass.school_year, storedPeriods.filter((item) => item.school_year === klass.school_year))).map((item) => [item.short_label, item])).values()]
   const subjects = data?.subjects ?? []
   const assessments = data?.assessments ?? []
   const filtered = activities.filter((activity) => `${activity.title} ${activity.description ?? ""}`.toLowerCase().includes(query.toLowerCase()) && (type === "all" || activity.activity_type === type) && (period === "all" || assignments.some((item) => item.activity_id === activity.id && periodKeyForSchoolYear(item.grading_period, item.school_year) === period)) && (classFilter === "all" || assignments.some((item) => item.activity_id === activity.id && item.class_id === classFilter)) && (status === "all" || assessments.some((item) => item.activity_id === activity.id && item.status === status)))
   const pageActivities = filtered.slice((page - 1) * DEFAULT_PAGE_SIZE, page * DEFAULT_PAGE_SIZE)
   const counts = useMemo(() => ({ total: activities.length, active: activities.filter((activity) => activity.due_date && new Date(`${activity.due_date}T23:59:59`) >= new Date()).length, completed: activities.filter((activity) => assignments.some((item) => item.activity_id === activity.id) && assessments.some((item) => item.activity_id === activity.id && item.status === "published")).length, classes: new Set(assignments.map((item) => item.class_id)).size }), [activities, assignments, assessments])
 
-  function toggleClass(classId: string) { setForm((current) => ({ ...current, classIds: current.classIds.includes(classId) ? current.classIds.filter((id) => id !== classId) : [...current.classIds, classId] })) }
+  function toggleClass(classId: string) {
+    const classRecord = classes.find((item) => item.id === classId)
+    if (classRecord && classRecord.grade_level <= 1) {
+      setCreateMessage(`${gradeLevelLabel(classRecord.grade_level)} uses competency-based PACE ratings. Record them in the PACE form instead of creating a numeric activity.`)
+      return
+    }
+    setForm((current) => ({ ...current, classIds: current.classIds.includes(classId) ? current.classIds.filter((id) => id !== classId) : [...current.classIds, classId] }))
+  }
   async function deleteActivity(activityId: string, title: string) {
     if (!window.confirm(`Permanently delete "${title}" and its linked assessments, pupil scores, and class assignments? This action cannot be undone.`)) return
     setDeletingActivityId(activityId)
@@ -107,7 +115,15 @@ export default function AcademicActivitiesPage() {
     if (!form.classIds.length) { setCreateMessage("Assign this activity to at least one class."); return }
     const selectedClasses = form.classIds.map((classId) => classes.find((item) => item.id === classId))
     if (selectedClasses.some((item) => !item)) { setCreateMessage("One or more selected classes are no longer available. Refresh and try again."); return }
-    if (!formPeriods.some((item) => item.short_label === effectiveFormPeriod) || selectedClasses.some((item) => periodKeyForSchoolYear(effectiveFormPeriod, item!.school_year) !== effectiveFormPeriod)) {
+    if (selectedClasses.some((item) => item!.grade_level <= 1)) {
+      setCreateMessage("Kinder and Grade 1 use competency-based records. Use the separate competency or PACE form instead of creating a numeric activity.")
+      return
+    }
+    if (!formPeriods.some((item) => item.short_label === effectiveFormPeriod) || selectedClasses.some((item) => {
+      const classRecord = item!
+      return !gradingPeriodsForGrade(classRecord.grade_level, classRecord.school_year, storedPeriods.filter((period) => period.school_year === classRecord.school_year))
+        .some((period) => period.short_label === effectiveFormPeriod)
+    })) {
       setCreateMessage("Choose a grading period supported by every selected class.")
       return
     }
@@ -252,6 +268,10 @@ export default function AcademicActivitiesPage() {
   if (error) return <main className="mx-auto max-w-7xl p-6"><p className="text-sm text-destructive">Unable to load academic activities.</p></main>
   return <main className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
     <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-start"><div><p className="text-sm font-medium text-primary">Teacher workspace</p><h1 className="mt-1 text-3xl font-semibold tracking-tight">Academic Activities</h1><p className="mt-2 text-sm text-muted-foreground">Create, assign, and monitor activities across your classes.</p></div><Button onClick={() => setShowCreate(true)}><Plus data-icon="inline-start" />Create activity</Button></header>
+    <section className="flex flex-col justify-between gap-4 rounded-xl border border-primary/20 bg-primary/5 p-4 sm:flex-row sm:items-center">
+      <div><h2 className="font-semibold">Grade 1 PACE assessments</h2><p className="mt-1 text-sm text-muted-foreground">Rate each pupil against the workbook competencies using the PACE A–E scale.</p></div>
+      <Button render={<Link href="/competency-records" />} variant="outline">Open PACE forms</Button>
+    </section>
     {createMessage && !showCreate && <p className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive" role="alert">{createMessage}</p>}
     <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4"><Stat icon={ClipboardList} label="Total Activities" value={counts.total} /><Stat icon={CalendarDays} label="Active" value={counts.active} /><Stat icon={CheckCircle2} label="Published" value={counts.completed} /><Stat icon={Users} label="Classes" value={counts.classes} /></section>
     <section className="flex flex-col gap-3 rounded-xl border bg-card p-4 lg:flex-row"><label className="relative flex-1"><Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><span className="sr-only">Search activities</span><input className="h-10 w-full rounded-md border bg-background pl-9 pr-3 text-sm" placeholder="Search activities" value={query} onChange={(event) => { setQuery(event.target.value); setPage(1) }} /></label><select aria-label="Filter by class" className="h-10 rounded-md border bg-background px-3 text-sm" value={classFilter} onChange={(event) => { setClassFilter(event.target.value); setPage(1) }}><option value="all">All classes</option>{classes.map((item) => <option key={item.id} value={item.id}>{gradeLevelLabel(item.grade_level)} – {item.section_name}</option>)}</select><select className="h-10 rounded-md border bg-background px-3 text-sm" value={type} onChange={(event) => { setType(event.target.value); setPage(1) }}><option value="all">All types</option>{["Assignment","Quiz","Project","Performance Task","Quarterly Examination"].map((item) => <option key={item}>{item}</option>)}</select><select className="h-10 rounded-md border bg-background px-3 text-sm" value={period} onChange={(event) => { setPeriod(event.target.value); setPage(1) }}><option value="all">All periods</option>{allPeriodOptions.map((item) => <option key={item.short_label} value={item.short_label}>{item.display_name}</option>)}</select><select className="h-10 rounded-md border bg-background px-3 py-2 text-sm" value={status} onChange={(event) => { setStatus(event.target.value); setPage(1) }}><option value="all">All status</option><option value="draft">Draft</option><option value="published">Published</option><option value="archived">Archived</option></select></section>

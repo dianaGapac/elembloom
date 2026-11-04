@@ -10,6 +10,7 @@ import { PlanSuggestionDialog } from "@/components/interventions/plan-suggestion
 import type { SuggestedInterventionPlan } from "@/lib/intervention-planner"
 import { createClient } from "@/lib/supabase/client"
 import { matchesPupilGender, PupilGenderFilter, sortPupilsAlphabetically, type PupilGenderFilterValue } from "@/components/pupils/gender-filter"
+import { DistributionChart, TrendChart } from "@/components/ui/trend-chart"
 
 type Student = { id: string; class_id: string; first_name: string; last_name: string; student_number: string; gender: "male" | "female" | null; parent_guardian_email?: string | null }
 type ClassRecord = { id: string; grade_level: number; section_name: string; school_year: string; subject_name: string | null }
@@ -18,6 +19,7 @@ type RiskSettingRow = { school_year: string; grade_level: number | null; subject
 type Score = { assessment_id: string; student_id: string; score: number | null; updated_at?: string }
 type Attendance = { student_id: string; class_id: string; attendance_date: string; status: "present" | "absent" | "late" | "excused" }
 type Plan = { id: string; student_id: string; title: string; owner_name: string | null; start_date: string; target_date: string | null; goal: string; baseline: string | null; target_performance: string | null; success_criteria: string | null; status: string; risk_level: string; risk_factors: string[] }
+type RegisterRow = { student: Student; cls: ClassRecord | undefined; risk: ReturnType<typeof classifyRisk>; focusSubject: string; focusAverage: number | null; plan: Plan | null; activePlan: Plan | null; draftPlan: Plan | null }
 type Objective = { id: string; plan_id: string; concern: string; objective: string; strategy: string; resources: string | null; frequency: string | null; duration_minutes: number | null; assigned_teacher: string | null; expected_outcome: string | null; measurement_method: string | null; baseline: string | null; target: string | null; status: string }
 type Session = { id: string; plan_id: string; session_number: number; scheduled_date: string; start_time: string | null; end_time: string | null; activity: string; status: string }
 type SessionReport = { session_id: string; parent_update_pending: boolean | null; attendance: string | null; activities_conducted: string | null; skills_addressed: string | null; observation_results: string | null; previous_performance: string | null; current_performance: string | null; teacher_remarks: string | null; participation: string | null; challenges: string | null; follow_up_actions: string | null; next_session_date: string | null; supporting_notes: string | null; progress_summary: string | null }
@@ -98,38 +100,63 @@ export default function InterventionsPage() {
   const riskRows = sortPupilsAlphabetically(students.filter((student) => matchesPupilGender(student.gender, genderFilter))).map((student) => {
     const cls = classes.find((item) => item.id === student.class_id)
     const risk = classifyRisk(student, { classes, assessments, scores, attendance, settings: riskThresholdsFor(cls) })
-    const activeGap = plans.some((plan) => plan.student_id === student.id && ["active", "draft"].includes(plan.status))
     const focus = risk.subjects.filter((item) => item.belowPassing && item.average !== null).sort((a, b) => (a.average ?? 0) - (b.average ?? 0))[0]
     const focusSubject = focus?.subject ?? risk.subjects.filter((item) => item.average !== null).slice().sort((a, b) => (a.average ?? 0) - (b.average ?? 0))[0]?.subject ?? cls?.subject_name ?? "Academic"
     const displayClass = cls ? { ...cls, subject_name: focusSubject } : cls
-    return { student, cls: displayClass, risk, level: risk.level, average: focus?.average ?? risk.average, focusSubject, latest: risk.assessed, activeGap }
-  }).filter((row) => ["moderate", "high"].includes(row.level) && !row.activeGap)
-  const registerRows = students.map((student) => {
+    return { student, cls: displayClass, risk, level: risk.level, average: focus?.average ?? risk.average, focusSubject, latest: risk.assessed }
+  }).filter((row) => ["moderate", "high"].includes(row.level))
+  const registerRows = students.flatMap<RegisterRow>((student) => {
     const cls = classes.find((item) => item.id === student.class_id)
     const risk = classifyRisk(student, { classes, assessments, scores, attendance, settings: riskThresholdsFor(cls) })
     const studentPlans = plans.filter((plan) => plan.student_id === student.id)
-    const activePlan = studentPlans.find((plan) => plan.status === "active") ?? null
-    const draftPlan = studentPlans.find((plan) => plan.status === "draft") ?? null
     const focus = risk.subjects.filter((item) => item.belowPassing && item.average !== null).sort((a, b) => (a.average ?? 0) - (b.average ?? 0))[0]
       ?? risk.subjects.filter((item) => item.average !== null).slice().sort((a, b) => (a.average ?? 0) - (b.average ?? 0))[0]
-    return { student, cls, risk, activePlan, draftPlan, focusSubject: focus?.subject ?? cls?.subject_name ?? "Academic", focusAverage: focus?.average ?? risk.average }
+    const row: Omit<RegisterRow, "plan" | "activePlan" | "draftPlan"> = { student, cls, risk, focusSubject: focus?.subject ?? cls?.subject_name ?? "Academic", focusAverage: focus?.average ?? risk.average }
+    return studentPlans.length
+      ? studentPlans.map((plan) => ({ ...row, plan, activePlan: plan.status === "active" ? plan : null, draftPlan: plan.status === "draft" ? plan : null }))
+      : ["high", "moderate"].includes(risk.level) ? [{ ...row, plan: null, activePlan: null, draftPlan: null }] : []
   }).sort((a, b) => a.student.last_name.localeCompare(b.student.last_name) || a.student.first_name.localeCompare(b.student.first_name))
-    .filter((row) => row.activePlan || row.draftPlan || ["high", "moderate"].includes(row.risk.level))
     .filter((row) => matchesPupilGender(row.student.gender, genderFilter))
     .filter((row) => {
       const search = planSearch.trim().toLowerCase()
-      const status = row.activePlan ? "active" : "pending"
-      const haystack = `${row.student.first_name} ${row.student.last_name} ${row.student.student_number} ${row.focusSubject} ${row.activePlan?.title ?? row.draftPlan?.title ?? ""}`.toLowerCase()
+      const status = row.plan?.status ?? "pending"
+      const haystack = `${row.student.first_name} ${row.student.last_name} ${row.student.student_number} ${row.focusSubject} ${row.plan?.title ?? ""}`.toLowerCase()
       return (!search || haystack.includes(search))
         && (planRisk === "all" || row.risk.level === planRisk)
         && (planStatus === "all" || status === planStatus)
         && (planClass === "all" || row.student.class_id === planClass)
-        && (planTeacher === "all" || (row.activePlan?.owner_name || row.draftPlan?.owner_name || "Unassigned") === planTeacher)
+        && (planTeacher === "all" || (row.plan?.owner_name || "Unassigned") === planTeacher)
     })
   const visibleRegisterRows = registerRows.slice((planPage - 1) * planPageSize, planPage * planPageSize)
   const activePlans = plans.filter((plan) => plan.status === "active")
   const upcomingSessions = sessions.filter((session) => { const date = new Date(`${session.scheduled_date}T00:00:00`); const now = new Date(); return session.status !== "completed" && date >= new Date(now.toDateString()) && date <= new Date(Date.now() + 7 * 86400000) }).length
   const pendingUpdates = sessionReports.filter((report) => report.parent_update_pending).length
+  const planStudentIds = new Set(plans.map((plan) => plan.student_id))
+  const planClassIds = new Set(students.filter((student) => planStudentIds.has(student.id)).map((student) => student.class_id))
+  const performanceByDate = new Map<string, number[]>()
+  for (const assessment of assessments.filter((item) => planClassIds.has(item.class_id))) {
+    const latestScores = scores
+      .filter((score) => score.assessment_id === assessment.id && planStudentIds.has(score.student_id))
+      .reduce((latest, score) => {
+        const current = latest.get(score.student_id)
+        if (!current || String(score.updated_at ?? "").localeCompare(String(current.updated_at ?? "")) > 0) latest.set(score.student_id, score)
+        return latest
+      }, new Map<string, Score>())
+    const percentages = [...latestScores.values()]
+      .filter((score) => score.score !== null && assessment.total_points > 0)
+      .map((score) => (Number(score.score) / Number(assessment.total_points)) * 100)
+      .filter(Number.isFinite)
+    if (percentages.length) performanceByDate.set(assessment.assessment_date, [...(performanceByDate.get(assessment.assessment_date) ?? []), ...percentages])
+  }
+  const interventionTrend = [...performanceByDate.entries()]
+    .sort(([dateA], [dateB]) => dateA.localeCompare(dateB))
+    .map(([date, values]) => ({ label: date, value: values.reduce((sum, value) => sum + value, 0) / values.length }))
+  const planStatusDistribution = [
+    { label: "Draft", count: plans.filter((plan) => plan.status === "draft").length, color: "bg-slate-400" },
+    { label: "Active", count: plans.filter((plan) => plan.status === "active").length, color: "bg-primary" },
+    { label: "Completed", count: plans.filter((plan) => plan.status === "completed").length, color: "bg-emerald-500" },
+    { label: "Cancelled", count: plans.filter((plan) => plan.status === "cancelled").length, color: "bg-muted-foreground" },
+  ]
 
   async function deleteIntervention(plan: Plan) {
     if (!window.confirm(`Permanently delete "${plan.title}" and its objectives, sessions, progress reports, and communication history? This cannot be undone.`)) return
@@ -179,30 +206,27 @@ export default function InterventionsPage() {
   useEffect(() => { if (selectedPlan) setPlanForm({ title: selectedPlan.title, owner_name: selectedPlan.owner_name ?? "", start_date: selectedPlan.start_date, target_date: selectedPlan.target_date ?? "", goal: selectedPlan.goal, baseline: selectedPlan.baseline ?? "", target_performance: selectedPlan.target_performance ?? "", success_criteria: selectedPlan.success_criteria ?? "", risk_level: selectedPlan.risk_level, risk_factors: selectedPlan.risk_factors.join("\n") }) }, [planId])
 
   function updatePlanForm(key: keyof typeof planForm, value: string) { setPlanForm((form) => ({ ...form, [key]: value })) }
-  function openInterventionPlan(row: typeof registerRows[number]) {
-    const existing = row.activePlan ?? row.draftPlan
+  function openInterventionPlan(row: { student: Student; focusSubject: string; focusAverage: number | null; risk: ReturnType<typeof classifyRisk> }) {
     setStudentId(row.student.id)
-    setPlanId(existing?.id ?? "")
+    setPlanId("")
     setForceNewPlan(true)
     setError("")
     setMessage("")
-    if (!existing) {
-      setPlanForm({
-        title: `${row.focusSubject} support plan`,
-        owner_name: "",
-        start_date: today,
-        target_date: "",
-        goal: `Provide focused support in ${row.focusSubject} and review progress using classroom evidence.`,
-        baseline: row.focusAverage === null ? "" : `${row.focusAverage.toFixed(1)}% subject average`,
-        target_performance: "",
-        success_criteria: "",
-        risk_level: row.risk.level,
-        risk_factors: row.risk.factors.join("\n"),
-      })
-      setObjectiveForm({ concern: "", objective: "", strategy: "", resources: "", frequency: "", duration_minutes: "", assigned_teacher: "", expected_outcome: "", measurement_method: "", baseline: "", target: "" })
-    }
+    setPlanForm({
+      title: `${row.focusSubject} support plan`,
+      owner_name: "",
+      start_date: today,
+      target_date: "",
+      goal: `Provide focused support in ${row.focusSubject} and review progress using classroom evidence.`,
+      baseline: row.focusAverage === null ? "" : `${row.focusAverage.toFixed(1)}% subject average`,
+      target_performance: "",
+      success_criteria: "",
+      risk_level: row.risk.level,
+      risk_factors: row.risk.factors.join("\n"),
+    })
+    setObjectiveForm({ concern: "", objective: "", strategy: "", resources: "", frequency: "", duration_minutes: "", assigned_teacher: "", expected_outcome: "", measurement_method: "", baseline: "", target: "" })
     setCreatePlanOpen(true)
-    setSuggestionOpen(!existing)
+    setSuggestionOpen(true)
   }
   function applySuggestedPlan(suggestion: SuggestedInterventionPlan) {
     setPlanForm((form) => ({
@@ -302,7 +326,7 @@ export default function InterventionsPage() {
     <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
       <label className="text-sm font-medium">Search pupils, subjects, or plans<input className={inputClass} value={planSearch} onChange={(event) => { setPlanSearch(event.target.value); setPlanPage(1) }} placeholder="Name, student number, subject…" /></label>
       <label className="text-sm font-medium">Risk<select className={inputClass} value={planRisk} onChange={(event) => { setPlanRisk(event.target.value); setPlanPage(1) }}><option value="all">All risks</option><option value="high">High</option><option value="moderate">Moderate</option><option value="low">Low</option><option value="incomplete">Incomplete</option></select></label>
-      <label className="text-sm font-medium">Status<select className={inputClass} value={planStatus} onChange={(event) => { setPlanStatus(event.target.value); setPlanPage(1) }}><option value="all">All statuses</option><option value="active">Active</option><option value="pending">Pending plan</option></select></label>
+      <label className="text-sm font-medium">Status<select className={inputClass} value={planStatus} onChange={(event) => { setPlanStatus(event.target.value); setPlanPage(1) }}><option value="all">All statuses</option><option value="pending">Needs plan</option><option value="draft">Draft</option><option value="active">Active</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select></label>
       <label className="text-sm font-medium">Class / section<select className={inputClass} value={planClass} onChange={(event) => { setPlanClass(event.target.value); setPlanPage(1) }}><option value="all">All classes</option>{classes.map((cls) => <option key={cls.id} value={cls.id}>Grade {cls.grade_level} · {cls.section_name}</option>)}</select></label>
       <div className="flex items-end gap-3"><PupilGenderFilter value={genderFilter} onChange={(value) => { setGenderFilter(value); setPlanPage(1) }} /><Button type="button" variant="outline" onClick={resetPlanFilters}>Clear filters</Button></div>
     </section>
@@ -310,27 +334,24 @@ export default function InterventionsPage() {
     {message && <p className="rounded-lg border border-primary/30 bg-primary/10 p-3 text-sm text-primary" role="status">{message}</p>}
     {loading && <p className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">Loading risk and intervention records…</p>}
     <section className="overflow-hidden rounded-xl border bg-card">
-      <div className="border-b p-4"><h2 className="font-semibold">Pupil risk register &amp; interventions</h2><p className="mt-1 text-sm text-muted-foreground">{registerRows.length} pupils need review or have an active plan. Pending plans include both unplanned pupils and saved drafts.</p></div>
+      <div className="border-b p-4"><h2 className="font-semibold">Pupil risk register &amp; interventions</h2><p className="mt-1 text-sm text-muted-foreground">Each intervention plan appears separately, including multiple subject plans for one pupil. Pupils with no plan are included when their risk is moderate or high.</p></div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[980px] text-left text-sm">
           <thead className="bg-muted/40 text-xs uppercase text-muted-foreground"><tr><th className="p-3">Pupil</th><th className="p-3">Class</th><th className="p-3">Performance</th><th className="p-3">Risk</th><th className="p-3">Intervention</th><th className="p-3">Status</th><th className="p-3">Action</th></tr></thead>
           <tbody className="divide-y">
             {visibleRegisterRows.map((row) => {
-              const activePlan = row.activePlan
-              const pendingPlan = row.draftPlan
-              const displayPlan = activePlan ?? pendingPlan
-              const status = activePlan ? "Active" : "Pending plan"
-              return <tr key={row.student.id} className="hover:bg-muted/20">
+              const status = row.plan?.status ?? "Needs plan"
+              return <tr key={`${row.student.id}-${row.plan?.id ?? "needs-plan"}`} className="hover:bg-muted/20">
                 <td className="p-3"><p className="font-medium">{row.student.last_name}, {row.student.first_name}</p><p className="text-xs text-muted-foreground">{row.student.student_number}</p></td>
                 <td className="p-3">Grade {row.cls?.grade_level ?? "—"} · {row.cls?.section_name ?? "—"}<p className="text-xs text-muted-foreground">{row.cls?.school_year}</p></td>
                 <td className="p-3 tabular-nums">{row.focusAverage === null ? "No score data" : `${row.focusAverage.toFixed(1)}%`}</td>
                 <td className="p-3"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${row.risk.level === "high" ? "bg-destructive/10 text-destructive" : row.risk.level === "moderate" ? "bg-amber-500/10 text-amber-700 dark:text-amber-300" : "bg-muted text-muted-foreground"}`}>{row.risk.label}</span></td>
-                <td className="max-w-48 p-3"><p className="truncate">{displayPlan?.title ?? "Not created"}</p>{displayPlan?.target_date && <p className="text-xs text-muted-foreground">Review by {displayPlan.target_date}</p>}</td>
-                <td className="p-3"><span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${activePlan ? "border-primary/40 bg-primary/10 text-primary" : "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"}`}>{status}</span></td>
-                <td className="p-3"><div className="flex items-center gap-2">{activePlan
-                  ? <Link className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium hover:bg-muted" href={`/interventions/${activePlan.id}`}><ClipboardList className="size-4" />View / edit</Link>
-                  : <Button type="button" size="sm" onClick={() => openInterventionPlan(row)}><Plus data-icon="inline-start" />{pendingPlan ? "Edit draft" : "Create plan"}</Button>}
-                  {displayPlan && <Button type="button" variant="ghost" size="icon" aria-label={`Delete intervention ${displayPlan.title}`} disabled={deletingPlanId === displayPlan.id} onClick={() => void deleteIntervention(displayPlan)}><Trash2 className="size-4 text-destructive" /></Button>}
+                <td className="max-w-48 p-3"><p className="truncate">{row.plan?.title ?? "Not created"}</p>{row.plan?.target_date && <p className="text-xs text-muted-foreground">Review by {row.plan.target_date}</p>}</td>
+                <td className="p-3"><span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${row.plan?.status === "active" ? "border-primary/40 bg-primary/10 text-primary" : row.plan?.status === "completed" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"}`}>{status}</span></td>
+                <td className="p-3"><div className="flex flex-wrap items-center gap-2">
+                  {row.plan && <Link className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium hover:bg-muted" href={`/interventions/${row.plan.id}`}><ClipboardList className="size-4" />View plan</Link>}
+                  <Button type="button" size="sm" variant={row.plan ? "outline" : "default"} onClick={() => openInterventionPlan(row)}><Plus data-icon="inline-start" />{row.plan ? "Add another" : "Create plan"}</Button>
+                  {row.plan && <Button type="button" variant="ghost" size="icon" aria-label={`Delete intervention ${row.plan.title}`} disabled={deletingPlanId === row.plan.id} onClick={() => void deleteIntervention(row.plan!)}><Trash2 className="size-4 text-destructive" /></Button>}
                 </div></td>
               </tr>
             })}
@@ -392,6 +413,10 @@ export default function InterventionsPage() {
 
   return <main className="space-y-6 pb-12"><header><p className="text-sm font-medium text-primary">Intervention tracking</p><h1 className="mt-1 text-3xl font-semibold tracking-tight">Support plans and progress</h1><p className="mt-2 max-w-3xl text-muted-foreground">Create connected intervention plans from risk signals, define measurable objectives, schedule support sessions, and document outcomes for review.</p></header>
     <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><button type="button" onClick={() => { setPlanStatus("active"); setPlanPage(1) }} className="rounded-xl border bg-card p-5 text-left transition hover:border-primary"><div className="flex items-center justify-between"><span className="text-sm text-muted-foreground">Active interventions</span><ShieldAlert className="size-5 text-primary" /></div><p className="mt-3 text-3xl font-bold">{activePlans.length}</p><p className="mt-1 text-xs text-muted-foreground">Ongoing support plans</p></button><button type="button" onClick={() => document.getElementById("students-requiring-intervention")?.scrollIntoView({ behavior: "smooth" })} className="rounded-xl border bg-card p-5 text-left transition hover:border-primary"><div className="flex items-center justify-between"><span className="text-sm text-muted-foreground">Students needing intervention</span><Users className="size-5 text-primary" /></div><p className="mt-3 text-3xl font-bold">{new Set(riskRows.map((row) => row.student.id)).size}</p><p className="mt-1 text-xs text-muted-foreground">Moderate or high risk without an active plan</p></button><button type="button" onClick={() => setSessionPage(1)} className="rounded-xl border bg-card p-5 text-left transition hover:border-primary"><div className="flex items-center justify-between"><span className="text-sm text-muted-foreground">Upcoming sessions</span><CalendarClock className="size-5 text-primary" /></div><p className="mt-3 text-3xl font-bold">{upcomingSessions}</p><p className="mt-1 text-xs text-muted-foreground">Scheduled in the next 7 days</p></button><button type="button" className="rounded-xl border bg-card p-5 text-left transition hover:border-primary"><div className="flex items-center justify-between"><span className="text-sm text-muted-foreground">Pending parent updates</span><BellRing className="size-5 text-primary" /></div><p className="mt-3 text-3xl font-bold">{pendingUpdates}</p><p className="mt-1 text-xs text-muted-foreground">Reports ready for review or sending</p></button></section>
+    <section className="grid gap-4 lg:grid-cols-[2fr_1fr]">
+      <TrendChart title="Assessment trend for pupils with plans" points={interventionTrend} emptyMessage="No scored assessments are available yet for pupils with intervention plans." />
+      <DistributionChart title="Intervention plan status" items={planStatusDistribution} />
+    </section>
     {error && <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive" role="alert">{error}</div>}{message && <div className="rounded-lg border border-primary/30 bg-primary/10 p-3 text-sm text-primary" role="status">{message}</div>}
     <div className="flex justify-end"><PupilGenderFilter value={genderFilter} onChange={(value) => { setGenderFilter(value); setPlanPage(1); setStudentPage(1) }} /></div>
     <section className="space-y-4 rounded-xl border bg-card p-4"><div><h2 className="text-xl font-semibold">Active Interventions</h2><p className="mt-1 text-sm text-muted-foreground">Monitor ongoing support plans and track pupil progress.</p></div><div className="flex flex-col gap-3 lg:flex-row lg:items-end"><label className="flex-1 text-sm font-medium">Search pupil, student ID, or plan<input className="mt-1 w-full rounded-lg border bg-background px-3 py-2 text-sm" value={planSearch} onChange={(event) => { setPlanSearch(event.target.value); setPlanPage(1) }} placeholder="Search interventions" /></label><label className="text-sm">Risk<select className="mt-1 rounded-lg border bg-background px-3 py-2 text-sm" value={planRisk} onChange={(event) => { setPlanRisk(event.target.value); setPlanPage(1) }}><option value="all">All risk levels</option><option value="low">Low</option><option value="moderate">Moderate</option><option value="high">High</option><option value="incomplete">Incomplete</option></select></label><label className="text-sm">Status<select className="mt-1 rounded-lg border bg-background px-3 py-2 text-sm" value={planStatus} onChange={(event) => { setPlanStatus(event.target.value); setPlanPage(1) }}><option value="all">All statuses</option><option value="draft">Draft</option><option value="active">Active</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select></label><label className="text-sm">Assigned teacher<select className="mt-1 rounded-lg border bg-background px-3 py-2 text-sm" value={planTeacher} onChange={(event) => { setPlanTeacher(event.target.value); setPlanPage(1) }}><option value="all">All teachers</option>{planTeachers.map((teacher) => <option value={teacher} key={teacher}>{teacher}</option>)}</select></label><Button type="button" variant="outline" onClick={resetPlanFilters}>Clear filters</Button></div><div className="overflow-x-auto"><table className="w-full min-w-[1100px] text-sm"><thead className="border-b text-left text-muted-foreground"><tr><th className="p-3">Pupil</th><th className="p-3">Student ID</th><th className="p-3">Subject</th><th className="p-3">Target category</th><th className="p-3">Risk</th><th className="p-3">Intervention plan</th><th className="p-3">Assigned teacher</th><th className="p-3">Start</th><th className="p-3">Target</th><th className="p-3">Progress</th><th className="p-3">Status</th><th className="p-3">Actions</th></tr></thead><tbody>{visiblePlans.map((plan) => { const pupil = students.find((student) => student.id === plan.student_id); const planReports = sessionReports.filter((report) => sessions.some((session) => session.plan_id === plan.id && session.id === report.session_id)); const recordedPerformance = planReports.map((report) => report.current_performance?.match(/\d+(?:\.\d+)?/)?.[0]).filter(Boolean).map(Number).at(-1); const progress = recordedPerformance ?? (planReports.length ? 50 : 0); return <tr className="border-b last:border-0" key={plan.id}><td className="p-3 font-medium">{pupil ? `${pupil.first_name} ${pupil.last_name}` : "Unknown pupil"}</td><td className="p-3 text-muted-foreground">{pupil?.student_number || "—"}</td><td className="p-3">Learning support</td><td className="p-3">{objectives.find((objective) => objective.plan_id === plan.id)?.concern || "General support"}</td><td className="p-3"><span className={`rounded-full border px-2 py-1 text-xs font-medium ${plan.risk_level === "high" ? "border-red-300 text-red-700" : plan.risk_level === "moderate" ? "border-amber-300 text-amber-700" : "border-emerald-300 text-emerald-700"}`}>{plan.risk_level}</span></td><td className="max-w-48 p-3">{plan.title}</td><td className="p-3">{plan.owner_name || "Unassigned"}</td><td className="p-3">{plan.start_date}</td><td className="p-3">{plan.target_date || "—"}</td><td className="p-3"><div className="flex items-center gap-2"><div className="h-2 w-20 overflow-hidden rounded-full bg-muted"><div className="h-full bg-primary" style={{ width: `${progress}%` }} /></div><span className="text-xs">{progress}%</span></div></td><td className="p-3"><span className="rounded-full border px-2 py-1 text-xs font-medium">{plan.status}</span></td><td className="p-3"><Link className="inline-flex items-center rounded-md border px-3 py-2 text-sm font-medium" href={`/interventions/${plan.id}`}>View Intervention</Link></td></tr> })}{!visiblePlans.length && <tr><td colSpan={12} className="p-8 text-center text-muted-foreground">No interventions match the selected filters.</td></tr>}</tbody></table></div><div className="flex flex-col gap-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between"><span>Showing {filteredPlans.length ? (planPage - 1) * planPageSize + 1 : 0}–{Math.min(planPage * planPageSize, filteredPlans.length)} of {filteredPlans.length} interventions</span><div className="flex flex-wrap items-center gap-2"><label>Rows<select className="ml-2 rounded-md border bg-background px-2 py-1" value={planPageSize} onChange={(event) => { setPlanPageSize(Number(event.target.value)); setPlanPage(1) }}><option value={10}>10</option><option value={25}>25</option><option value={50}>50</option></select></label><Button type="button" size="sm" variant="outline" disabled={planPage === 1} onClick={() => setPlanPage((page) => page - 1)}>Previous</Button>{Array.from({ length: planTotalPages }, (_, index) => index + 1).slice(Math.max(0, planPage - 3), planPage + 2).map((page) => <Button type="button" size="sm" variant={page === planPage ? "default" : "outline"} key={page} onClick={() => setPlanPage(page)}>{page}</Button>)}<Button type="button" size="sm" variant="outline" disabled={planPage >= planTotalPages} onClick={() => setPlanPage((page) => page + 1)}>Next</Button></div></div></section><section id="students-requiring-intervention" className="space-y-4 rounded-xl border bg-card p-4"><div><h2 className="text-xl font-semibold">Students Requiring Intervention</h2><p className="mt-1 text-sm text-muted-foreground">Review at-risk pupils who may benefit from a targeted intervention plan.</p></div><div className="overflow-x-auto"><table className="w-full min-w-[900px] text-sm"><thead className="border-b text-left text-muted-foreground"><tr><th className="p-3">Pupil name</th><th className="p-3">Student ID</th><th className="p-3">Grade / section</th><th className="p-3">Subject</th><th className="p-3">Learning gap</th><th className="p-3">Category score</th><th className="p-3">Risk</th><th className="p-3">Latest assessment</th><th className="p-3">Actions</th></tr></thead><tbody>{riskRows.map((row) => <tr className="border-b last:border-0" key={`${row.student.id}-${row.level}`}><td className="p-3 font-medium">{row.student.first_name} {row.student.last_name}</td><td className="p-3">{row.student.student_number}</td><td className="p-3">{row.cls ? `${row.cls.grade_level} / ${row.cls.section_name}` : "—"}</td><td className="p-3">{row.cls?.subject_name || "Academic"}</td><td className="p-3">Overall academic performance</td><td className="p-3">{row.average === null ? "Unavailable" : `${row.average.toFixed(1)}%`}</td><td className="p-3"><span className={`rounded-full px-2 py-1 text-xs font-medium ${row.level === "high" ? "bg-destructive/10 text-destructive" : "bg-amber-500/10 text-amber-700 dark:text-amber-300"}`}>{row.level}</span></td><td className="p-3">{row.latest || "Unavailable"}</td><td className="p-3"><div className="flex gap-2"><Link className="inline-flex items-center rounded-md border px-3 py-2 text-sm font-medium" href={`/risk-assessment?student=${row.student.id}`}>View assessment</Link><Button type="button" size="sm" onClick={() => { setStudentId(row.student.id); setPlanId(""); setPlanForm((form) => ({ ...form, title: `${row.cls?.subject_name || "Academic"} support plan`, goal: `Improve ${row.cls?.subject_name || "academic"} performance based on the latest assessment results.`, risk_level: row.level, risk_factors: `Latest average: ${row.average === null ? "Unavailable" : `${row.average.toFixed(1)}%`}\nLearning need: Overall academic performance` })); setCreatePlanOpen(true) }}>Create intervention</Button></div></td></tr>)}{!riskRows.length && <tr><td colSpan={9} className="p-8 text-center text-muted-foreground">No moderate- or high-risk pupils without an active intervention were found.</td></tr>}</tbody></table></div><div className="flex items-center justify-between text-sm text-muted-foreground"><span>{riskRows.length} learning need{riskRows.length === 1 ? "" : "s"} identified</span><span>Use View assessment to inspect underlying records.</span></div></section><section className="grid gap-4 lg:grid-cols-[280px_1fr]"><div className="rounded-xl border bg-card p-4 lg:col-span-2"><div className="flex items-center gap-2"><ClipboardList className="size-4 text-primary" /><h2 className="font-semibold">Pupils</h2></div><div className="mt-4 overflow-x-auto"><table className="w-full text-sm"><thead className="border-b text-left text-muted-foreground"><tr><th className="p-3">Pupil</th><th className="p-3">Student number</th><th className="p-3">Action</th></tr></thead><tbody>{loading ? <tr><td className="p-3" colSpan={3}>Loading pupils…</td></tr> : visibleStudents.map((student) => <tr className={`border-b last:border-0 ${student.id === studentId ? "bg-primary/5" : ""}`} key={student.id}><td className="p-3 font-medium">{student.first_name} {student.last_name}</td><td className="p-3 text-muted-foreground">{student.student_number}</td><td className="p-3"><Button type="button" size="sm" variant={student.id === studentId ? "default" : "outline"} onClick={() => setStudentId(student.id)}>{student.id === studentId ? "Selected" : "Select"}</Button></td></tr>)}{!loading && !students.length && <tr><td className="p-3" colSpan={3}>No active pupils found.</td></tr>}</tbody></table></div><div className="mt-3 flex items-center justify-between text-sm text-muted-foreground"><span>Page {studentPage} of {Math.max(1, Math.ceil(students.length / pageSize))}</span><div className="flex gap-2"><Button type="button" size="sm" variant="outline" disabled={studentPage === 1} onClick={() => setStudentPage((page) => page - 1)}>Previous</Button><Button type="button" size="sm" variant="outline" disabled={studentPage >= Math.ceil(students.length / pageSize)} onClick={() => setStudentPage((page) => page + 1)}>Next</Button></div></div></div>

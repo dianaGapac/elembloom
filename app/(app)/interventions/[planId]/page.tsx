@@ -100,7 +100,7 @@ export default function InterventionDetailPage({
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState("");
 	const [sending, setSending] = useState(false);
-	const [activating, setActivating] = useState(false);
+	const [updatingStatus, setUpdatingStatus] = useState(false);
 	const [message, setMessage] = useState("");
 	const [dialog, setDialog] = useState<"schedule" | "progress" | null>(null);
 	const [selectedSession, setSelectedSession] = useState<Session | null>(null);
@@ -217,8 +217,8 @@ export default function InterventionDetailPage({
 		);
 	async function activatePlan() {
 		const currentPlan = plan;
-		if (!currentPlan || currentPlan.status === "active") return;
-		setActivating(true);
+		if (!currentPlan || currentPlan.status !== "draft") return;
+		setUpdatingStatus(true);
 		setMessage("");
 		const { error: updateError } = await supabase
 			.from("intervention_plans")
@@ -229,7 +229,25 @@ export default function InterventionDetailPage({
 			setPlan({ ...currentPlan, status: "active" });
 			setMessage("Intervention plan activated.");
 		}
-		setActivating(false);
+		setUpdatingStatus(false);
+	}
+
+	async function completePlan() {
+		const currentPlan = plan;
+		if (!currentPlan || !["draft", "active"].includes(currentPlan.status)) return;
+		setUpdatingStatus(true);
+		setError("");
+		setMessage("");
+		const { error: updateError } = await supabase
+			.from("intervention_plans")
+			.update({ status: "completed", updated_at: new Date().toISOString() })
+			.eq("id", currentPlan.id);
+		if (updateError) setError(`Intervention plan could not be completed: ${updateError.message}`);
+		else {
+			setPlan({ ...currentPlan, status: "completed" });
+			setMessage("Intervention plan marked as completed.");
+		}
+		setUpdatingStatus(false);
 	}
 
 	async function deletePlan() {
@@ -272,11 +290,25 @@ export default function InterventionDetailPage({
 		setSending(true);
 		setError("");
 		setMessage("");
+		const completionEvidence = currentPlan.status === "completed" && !session
+			? reports
+				.map((item) => {
+					const relatedSession = sessions.find((entry) => entry.id === item.session_id);
+					const evidence = item.progress_summary || item.current_performance || item.teacher_remarks;
+					return evidence ? `${relatedSession?.scheduled_date ?? "Date not recorded"}: ${evidence}` : "";
+				})
+				.filter(Boolean)
+				.slice(-5)
+			: [];
 		const subject = session
 			? `Session progress update for ${currentStudent.first_name} ${currentStudent.last_name}`
-			: `Intervention plan update for ${currentStudent.first_name} ${currentStudent.last_name}`;
+			: currentPlan.status === "completed"
+				? `Intervention completed: ${currentStudent.first_name} ${currentStudent.last_name}`
+				: `Intervention plan update for ${currentStudent.first_name} ${currentStudent.last_name}`;
 		const message = session
 			? `Dear Parent/Guardian,\n\nWe are sharing an update from ${currentStudent.first_name} ${currentStudent.last_name}'s support session.\n\nSession activity: ${session.activity}\nScheduled date: ${session.scheduled_date}\nProgress: ${report?.progress_summary || report?.current_performance || report?.teacher_remarks || "Progress is being monitored."}\nActivities conducted: ${report?.activities_conducted || "Not recorded"}\nSkills addressed: ${report?.skills_addressed || "Not recorded"}\nNext steps: ${report?.follow_up_actions || "To be confirmed with the teacher."}${report?.next_session_date ? `\nNext session: ${report.next_session_date}` : ""}\n\nElemBloom`
+			: currentPlan.status === "completed"
+				? `Dear Parent/Guardian,\n\n${currentStudent.first_name} ${currentStudent.last_name} has completed the intervention plan "${currentPlan.title}". We are pleased to share the documented progress below.\n\nPlan goal: ${currentPlan.goal}\nBaseline recorded: ${currentPlan.baseline || "Not recorded"}\nTarget: ${currentPlan.target_performance || "Not recorded"}\n\nProgress and evidence from session reports:\n${completionEvidence.length ? completionEvidence.map((item) => `• ${item}`).join("\n") : "No session progress evidence was recorded for this plan. Please contact the teacher to discuss the outcomes and any next steps."}\n\nThe information above reflects classroom records and teacher observations; it does not imply results that were not documented. Please contact the teacher if you would like to discuss the pupil's progress or continued support.\n\nElemBloom`
 			: `Dear Parent/Guardian,\n\n${currentStudent.first_name} ${currentStudent.last_name} has an intervention support plan.\n\nPlan: ${currentPlan.title}\nGoal: ${currentPlan.goal}\nBaseline: ${currentPlan.baseline || "Being reviewed"}\nTarget: ${currentPlan.target_performance || "To be agreed with the teacher"}\nReview date: ${currentPlan.target_date || "To be scheduled"}\n\nPlease contact the teacher with questions.\n\nElemBloom`;
 		try {
 			const response = await fetch("/api/parent-email", {
@@ -288,7 +320,7 @@ export default function InterventionDetailPage({
 					to: currentStudent.parent_guardian_email,
 					subject,
 					message,
-					type: session ? "session_update" : "intervention_plan",
+					type: session ? "session_update" : currentPlan.status === "completed" ? "intervention_completed" : "intervention_plan",
 				}),
 			});
 			const body = await response.json().catch(() => ({}));
@@ -297,7 +329,9 @@ export default function InterventionDetailPage({
 			setMessage(
 				session
 					? "Session progress update sent and recorded."
-					: "Intervention plan update sent and recorded.",
+					: currentPlan.status === "completed"
+						? "Intervention completion summary sent and recorded."
+						: "Intervention plan update sent and recorded.",
 			);
 			await loadData();
 		} catch (sendError) {
@@ -463,24 +497,37 @@ export default function InterventionDetailPage({
 							Delete intervention
 						</Button>
 						{/* <Link className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium" href={`/interventions?student=${student.id}&plan=${plan.id}&tab=objectives`}><Plus className="size-4" />Add objective</Link> */}
-						<Button
-							type='button'
-							onClick={() => {
-								setError("");
-								setDialog("schedule");
-							}}
-						>
-							<Plus data-icon='inline-start' />
-							Schedule session
-						</Button>
-						{plan.status !== "active" && (
+						{!["completed", "cancelled"].includes(plan.status) && (
 							<Button
 								type='button'
-								disabled={activating}
+								onClick={() => {
+									setError("");
+									setDialog("schedule");
+								}}
+							>
+								<Plus data-icon='inline-start' />
+								Schedule session
+							</Button>
+						)}
+						{plan.status === "draft" && (
+							<Button
+								type='button'
+								disabled={updatingStatus}
 								onClick={() => void activatePlan()}
 							>
 								<CheckCircle2 data-icon='inline-start' />
-								{activating ? "Activating…" : "Activate plan"}
+								{updatingStatus ? "Updating…" : "Activate plan"}
+							</Button>
+						)}
+						{["draft", "active"].includes(plan.status) && (
+							<Button
+								type='button'
+								variant='outline'
+								disabled={updatingStatus}
+								onClick={() => void completePlan()}
+							>
+								<CheckCircle2 data-icon='inline-start' />
+								{updatingStatus ? "Updating…" : "Mark as complete"}
 							</Button>
 						)}
 						<Button
@@ -490,7 +537,7 @@ export default function InterventionDetailPage({
 							onClick={() => void sendParentUpdate()}
 						>
 							<Send data-icon='inline-start' />
-							{sending ? "Sending…" : "Send plan notice"}
+							{sending ? "Sending…" : plan.status === "completed" ? "Send completion summary" : "Send plan notice"}
 						</Button>
 					</div>
 				</div>
