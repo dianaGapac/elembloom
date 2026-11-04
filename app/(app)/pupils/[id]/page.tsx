@@ -27,6 +27,9 @@ import {
 	periodKeyForSchoolYear,
 	periodLabelForSchoolYear,
 	gradingPeriodsForGrade,
+	kinderCompetencyDomains,
+	kinderCompetencyKey,
+	kinderCompetencyList,
 	subjectsForGrade,
 } from "@/lib/academic-structure";
 import jsPDF from "jspdf";
@@ -676,6 +679,7 @@ export default function PupilDetails({
 					(item) => item.status === "present" || item.status === "late",
 			).length,
 			absent: monthRecords.filter((item) => item.status === "absent").length,
+			excused: monthRecords.filter((item) => item.status === "excused").length,
 		};
 	});
 	const gradeOneAttendanceTotals = gradeOneAttendanceMonths.reduce(
@@ -685,6 +689,15 @@ export default function PupilDetails({
 			absent: totals.absent + month.absent,
 		}),
 		{ daysRecorded: 0, present: 0, absent: 0 },
+	);
+	const kinderAttendanceTotals = gradeOneAttendanceMonths.reduce(
+		(totals, month) => ({
+			daysRecorded: totals.daysRecorded + month.daysRecorded,
+			present: totals.present + month.present,
+			absent: totals.absent + month.absent,
+			excused: totals.excused + month.excused,
+		}),
+		{ daysRecorded: 0, present: 0, absent: 0, excused: 0 },
 	);
 	const reportHasConvertedGrades =
 		selectedReportRows.length > 0 &&
@@ -743,9 +756,12 @@ export default function PupilDetails({
 			timeZone: "Asia/Manila",
 		}).format(new Date());
 		const isGradeOneReport = classRecord.grade_level === 1;
+		const isKinderReport = classRecord.grade_level === 0;
 		const reportTitle = isGradeOneReport
 			? "LEARNER'S PROGRESS REPORT CARD"
-			: "PUPIL ACADEMIC REPORT CARD";
+			: isKinderReport
+				? "KINDER LEARNER'S PROGRESS REPORT"
+				: "PUPIL ACADEMIC REPORT CARD";
 
 		pdf.setFillColor(46, 139, 87);
 		pdf.rect(0, 0, pageWidth, 31, "F");
@@ -783,7 +799,9 @@ export default function PupilDetails({
 		pdf.text(
 			isGradeOneReport
 				? `Report scope: ${reportPeriod}`
-				: `Subject: ${reportSubject || "Not selected"}  |  Report period: ${reportPeriod}`,
+				: isKinderReport
+					? `Report scope: ${reportPeriod}`
+					: `Subject: ${reportSubject || "Not selected"}  |  Report period: ${reportPeriod}`,
 			pageWidth - margin - 5,
 			45,
 			{ align: "right" },
@@ -792,6 +810,8 @@ export default function PupilDetails({
 		pdf.text(
 			isGradeOneReport
 				? "Descriptive progress and PACE ratings; no numeric grades."
+				: isKinderReport
+					? "Developmental competencies rated CO, DV, or BG; no numeric grades."
 				: isCompetencyClass
 					? "Categorical competency progress is shown. Numeric grades do not apply."
 					: "Grades use assessment scores and saved grading policies.",
@@ -806,6 +826,8 @@ export default function PupilDetails({
 		pdf.text(
 			isGradeOneReport
 				? "Term narratives and attendance"
+				: isKinderReport
+					? "Kinder SF9 developmental record"
 				: isCompetencyClass
 				? "Competency progress results"
 				: "Term academic results",
@@ -955,6 +977,148 @@ export default function PupilDetails({
 			pdf.line(margin, y + 5, margin + 65, y + 5);
 			pdf.setFontSize(8);
 			pdf.text("Parent's/Guardian's Signature", margin, y + 10);
+		} else if (isKinderReport) {
+			pdf.setFont("helvetica", "normal");
+			pdf.setFontSize(8);
+			pdf.setTextColor(71, 85, 105);
+			pdf.text("Rating scale: CO — Consistent · DV — Developing · BG — Beginning", margin, y);
+			y += 5;
+			const comments = reportNarratives;
+			if (comments.length) {
+				pdf.setFont("helvetica", "bold");
+				pdf.setFontSize(9);
+				pdf.text("TEACHER'S COMMENTS / REMARKS", margin, y);
+				y += 5;
+				comments.forEach(({ term, report }) => {
+					const lines = pdf.splitTextToSize(report?.teacher_comments || "No teacher comments recorded.", tableWidth - 8);
+					const blockHeight = lines.length * 4 + 9;
+					if (y + blockHeight > pageHeight - 16) {
+						pdf.addPage();
+						y = 18;
+					}
+					pdf.setFillColor(245, 248, 251);
+					pdf.rect(margin, y, tableWidth, blockHeight, "F");
+					pdf.setFont("helvetica", "bold");
+					pdf.setFontSize(8);
+					pdf.setTextColor(30, 41, 59);
+					pdf.text(term.toUpperCase(), margin + 3, y + 4);
+					pdf.setFont("helvetica", "normal");
+					pdf.setTextColor(51, 65, 85);
+					pdf.text(lines, margin + 3, y + 8);
+					y += blockHeight + 2;
+				});
+			}
+
+			const terms = selectedReportRows;
+			const ratingWidth = 24;
+			const competencyWidth = tableWidth - terms.length * ratingWidth;
+			const drawDomainHeader = (domainName: string) => {
+				if (y + 18 > pageHeight - 15) {
+					pdf.addPage();
+					y = 18;
+				}
+				pdf.setFillColor(232, 245, 236);
+				pdf.rect(margin, y, tableWidth, 8, "F");
+				pdf.setFont("helvetica", "bold");
+				pdf.setFontSize(8);
+				pdf.setTextColor(30, 41, 59);
+				pdf.text(domainName, margin + 2, y + 5.5);
+				y += 8;
+				pdf.setFillColor(245, 248, 251);
+				pdf.rect(margin, y, tableWidth, 7, "F");
+				pdf.text("Developmental competency", margin + 2, y + 4.7);
+				terms.forEach((term, index) => {
+					pdf.text(term.quarter, margin + competencyWidth + index * ratingWidth + ratingWidth / 2, y + 4.7, { align: "center" });
+				});
+				y += 7;
+			};
+			const drawDomainRows = (domainName: string, rows: Array<{ key: string; competency: string }>) => {
+				drawDomainHeader(domainName);
+				rows.forEach(({ key, competency }) => {
+					const lines = pdf.splitTextToSize(competency, competencyWidth - 4);
+					const rowHeight = Math.max(7, lines.length * 3.5 + 2);
+					if (y + rowHeight > pageHeight - 15) {
+						pdf.addPage();
+						y = 18;
+						drawDomainHeader(domainName);
+					}
+					pdf.setDrawColor(218, 226, 233);
+					pdf.rect(margin, y, tableWidth, rowHeight);
+					pdf.setFont("helvetica", "normal");
+					pdf.setFontSize(7.5);
+					pdf.setTextColor(51, 65, 85);
+					pdf.text(lines, margin + 2, y + 4.5);
+					terms.forEach((term, index) => {
+						const record = reportProgressRows.find((item) =>
+							item.competency === key &&
+							periodKeyForSchoolYear(item.grading_period, classRecord.school_year) ===
+								periodKeyForSchoolYear(term.key, classRecord.school_year),
+						);
+						const cellX = margin + competencyWidth + index * ratingWidth;
+						pdf.line(cellX, y, cellX, y + rowHeight);
+						pdf.setFont("helvetica", "bold");
+						pdf.text(record?.rating ?? "—", cellX + ratingWidth / 2, y + 4.7, { align: "center" });
+					});
+					y += rowHeight;
+				});
+			};
+			const catalog = kinderCompetencyList();
+			kinderCompetencyDomains.forEach((domain) => {
+				drawDomainRows(domain.name, catalog.filter((item) => item.domain === domain.name));
+			});
+			const legacyCompetencies = [...new Set(reportProgressRows.map((item) => item.competency))]
+				.filter((name) => !catalog.some((item) => item.key === name))
+				.map((key) => ({ key, competency: key }));
+			if (legacyCompetencies.length) drawDomainRows("Previously entered competencies", legacyCompetencies);
+
+			if (y + 52 > pageHeight - 15) {
+				pdf.addPage();
+				y = 18;
+			}
+			y += 5;
+			pdf.setFont("helvetica", "bold");
+			pdf.setFontSize(9);
+			pdf.text("ATTENDANCE RECORD", margin, y);
+			y += 5;
+			const attendanceWidths = [45, 37, 37, 37, tableWidth - 156];
+			const attendanceHeaders = ["Month", "Days recorded", "Present", "Absent", "Excused"];
+			const drawAttendanceHeader = () => {
+				pdf.setFillColor(232, 245, 236);
+				pdf.rect(margin, y, tableWidth, 7, "F");
+				pdf.setFont("helvetica", "bold");
+				pdf.setFontSize(7);
+				let headerX = margin;
+				attendanceHeaders.forEach((label, index) => {
+					pdf.text(label, headerX + 2, y + 4.7);
+					headerX += attendanceWidths[index];
+				});
+				y += 7;
+			};
+			drawAttendanceHeader();
+			pdf.setFont("helvetica", "normal");
+			pdf.setFontSize(8);
+			gradeOneAttendanceMonths.forEach((month) => {
+				if (y + 7 > pageHeight - 15) {
+					pdf.addPage();
+					y = 18;
+					drawAttendanceHeader();
+				}
+				let x = margin;
+				const values = [month.name, String(month.daysRecorded || "—"), String(month.daysRecorded ? month.present : "—"), String(month.daysRecorded ? month.absent : "—"), String(month.daysRecorded ? month.excused : "—")];
+				values.forEach((value, index) => {
+					pdf.text(value, x + 2, y + 4.7);
+					x += attendanceWidths[index];
+				});
+				pdf.setDrawColor(226, 232, 240);
+				pdf.line(margin, y + 6, margin + tableWidth, y + 6);
+				y += 6;
+			});
+			pdf.setFont("helvetica", "bold");
+			pdf.text(`TOTAL · ${kinderAttendanceTotals.daysRecorded} days recorded · ${kinderAttendanceTotals.present} present · ${kinderAttendanceTotals.absent} absent · ${kinderAttendanceTotals.excused} excused`, margin, y + 5);
+			y += 10;
+			pdf.setFont("helvetica", "italic");
+			pdf.setFontSize(7);
+			pdf.text("Attendance values are based on saved pupil attendance entries only; they do not represent scheduled class days.", margin, y);
 		} else if (isCompetencyClass) {
 			pdf.setFont("helvetica", "bold");
 			pdf.setFontSize(10);
@@ -1122,7 +1286,7 @@ export default function PupilDetails({
 		try {
 			const pdf = await buildReportPdf();
 			pdf.save(
-			`${student.last_name}-${classRecord.grade_level === 1 ? "Grade-1-SF9" : reportSubject || "subject"}-report-card.pdf`,
+			`${student.last_name}-${classRecord.grade_level === 1 ? "Grade-1-SF9" : classRecord.grade_level === 0 ? "Kinder-SF9" : reportSubject || "subject"}-report-card.pdf`,
 			);
 		} catch (pdfError) {
 			setReportSendError(
@@ -1154,7 +1318,7 @@ export default function PupilDetails({
 				throw new Error("The report card PDF could not be generated.");
 			const scope = reportPeriod === "Full Year" ? "Full Year" : reportPeriod;
 			const reportLabel =
-				classRecord.grade_level === 1 ? "Grade-1-SF9" : reportSubject;
+				classRecord.grade_level === 1 ? "Grade-1-SF9" : classRecord.grade_level === 0 ? "Kinder-SF9" : reportSubject;
 			const fileName =
 				`${student.last_name}-${reportLabel}-${scope}-report-card.pdf`.replace(
 					/[^a-zA-Z0-9._-]/g,
@@ -1169,11 +1333,15 @@ export default function PupilDetails({
 					subject:
 						classRecord.grade_level === 1
 							? `Grade 1 learner progress report card for ${student.first_name} ${student.last_name}`
-							: `${reportPeriod} report card for ${student.first_name} ${student.last_name} - ${reportSubject}`,
+							: classRecord.grade_level === 0
+								? `Kinder developmental progress report for ${student.first_name} ${student.last_name}`
+								: `${reportPeriod} report card for ${student.first_name} ${student.last_name} - ${reportSubject}`,
 					message:
 						classRecord.grade_level === 1
 							? `Dear ${student.parent_guardian_name || "Parent/Guardian"},\n\nAttached is ${student.first_name} ${student.last_name}'s learner progress report card for ${classRecord.school_year}. It includes term narratives, attendance records, and the detailed PACE competency record for each learning area.\n\nPlease contact the class adviser if you have any questions.\n\nElemBloom`
-							: `Dear ${student.parent_guardian_name || "Parent/Guardian"},\n\nAttached is ${student.first_name} ${student.last_name}'s ${reportPeriod.toLowerCase()} academic report card for ${reportSubject}.\n\nNumeric grades are shown only where the grading configuration and approved conversion rule are available.\n\nPlease contact the class adviser if you have any questions.\n\nElemBloom`,
+							: classRecord.grade_level === 0
+								? `Dear ${student.parent_guardian_name || "Parent/Guardian"},\n\nAttached is ${student.first_name} ${student.last_name}'s Kinder developmental progress report for ${reportPeriod.toLowerCase()} of ${classRecord.school_year}. It includes developmental competency ratings, the teacher's comments, and recorded attendance. The competency scale is CO (Consistent), DV (Developing), and BG (Beginning); numeric grades do not apply.\n\nPlease contact the class adviser if you have any questions.\n\nElemBloom`
+								: `Dear ${student.parent_guardian_name || "Parent/Guardian"},\n\nAttached is ${student.first_name} ${student.last_name}'s ${reportPeriod.toLowerCase()} academic report card for ${reportSubject}.\n\nNumeric grades are shown only where the grading configuration and approved conversion rule are available.\n\nPlease contact the class adviser if you have any questions.\n\nElemBloom`,
 					type: "report_card",
 					attachment: {
 						fileName,
@@ -1694,6 +1862,8 @@ export default function PupilDetails({
 						<p className='mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700'>
 							{classRecord.grade_level === 1
 								? "Grade 1 progress is descriptive and competency-based; numeric and letter grades are not used as subject grades."
+								: classRecord.grade_level === 0
+									? "Kinder progress is recorded by developmental competency using CO, DV, and BG. Numeric grades do not apply."
 								: "Academic results are based on the latest E-Class Records provided and released by DepEd."}
 						</p>
 						{!student.parent_guardian_email && (
@@ -1855,40 +2025,74 @@ export default function PupilDetails({
 							</div>
 						)}
 						{classRecord.grade_level === 0 && reportSubject && (
-							<section className='mt-6 overflow-x-auto rounded-lg border'>
-								<table className='w-full text-left text-sm'>
-									<thead className='border-b bg-muted/30 text-xs uppercase text-muted-foreground'>
-										<tr>
-											<th className='px-3 py-3'>Term</th>
-											<th className='px-3 py-3'>Competency / progress area</th>
-											<th className='px-3 py-3'>Rating</th>
-											<th className='px-3 py-3'>Notes</th>
-										</tr>
-									</thead>
-									<tbody className='divide-y'>
-										{reportProgressRows.map((record) => (
-											<tr key={record.id}>
-												<td className='px-3 py-3'>
-													{periodLabelForSchoolYear(record.grading_period, classRecord.school_year)}
-												</td>
-												<td className='px-3 py-3'>{record.competency}</td>
-												<td className='px-3 py-3 font-medium'>
-													{record.rating}
-												</td>
-												<td className='px-3 py-3 text-muted-foreground'>
-													{record.notes || "—"}
-												</td>
-											</tr>
-										))}
-									</tbody>
-								</table>
-								{!reportProgressRows.length && (
-									<p className='p-6 text-center text-sm text-muted-foreground'>
-										No progress ratings are recorded for this subject and
-										selected scope.
-									</p>
-								)}
-							</section>
+							<div className='mt-6 space-y-6'>
+								<section className='space-y-3'>
+									<div>
+										<h3 className='font-semibold'>Teacher&apos;s comments / remarks</h3>
+										<p className='text-xs text-muted-foreground'>Comments saved for each term in the selected report scope.</p>
+									</div>
+									{reportNarratives.map(({ term, report }) => (
+										<article key={term} className='rounded-lg border'>
+											<h4 className='bg-muted/30 px-4 py-2 text-sm font-semibold'>{term}</h4>
+											<p className='min-h-12 whitespace-pre-wrap px-4 py-3 text-sm text-muted-foreground'>{report?.teacher_comments || "No teacher comments recorded for this term."}</p>
+										</article>
+									))}
+								</section>
+								<section className='space-y-3'>
+									<div>
+										<h3 className='font-semibold'>Developmental competencies</h3>
+										<p className='text-xs text-muted-foreground'>Rating scale: CO — Consistent · DV — Developing · BG — Beginning. Unrecorded competencies are shown as —.</p>
+									</div>
+									<div className='space-y-4'>
+										{kinderCompetencyDomains.map((domain) => {
+											const domainItems = kinderCompetencyList().filter((item) => item.domain === domain.name);
+											return <div key={domain.name} className='overflow-x-auto rounded-lg border'>
+												<h4 className='bg-muted/30 px-4 py-2 text-sm font-semibold'>{domain.name}</h4>
+												<table className='w-full min-w-[640px] text-left text-sm'>
+													<thead className='bg-muted/10 text-xs text-muted-foreground'><tr><th className='w-12 px-3 py-2 text-center'>No.</th><th className='px-3 py-2'>Developmental competency</th>{selectedReportRows.map((term) => <th key={term.key} className='w-24 px-3 py-2 text-center'>{term.quarter}</th>)}</tr></thead>
+													<tbody className='divide-y'>
+														{domainItems.map((item, index) => <tr key={item.key}>
+															<td className='px-3 py-2 text-center text-muted-foreground'>{index + 1}</td>
+															<td className='px-3 py-2'>{item.competency}</td>
+															{selectedReportRows.map((term) => {
+																const rating = reportProgressRows.find((record) =>
+																	record.competency === kinderCompetencyKey(domain.name, item.competency) &&
+																	periodKeyForSchoolYear(record.grading_period, classRecord.school_year) === periodKeyForSchoolYear(term.key, classRecord.school_year),
+																)?.rating;
+																return <td key={term.key} className='px-3 py-2 text-center font-semibold'>{rating || "—"}</td>;
+															})}
+														</tr>)}
+													</tbody>
+												</table>
+											</div>;
+										})}
+										{(() => {
+											const catalog = kinderCompetencyList();
+											const legacy = [...new Set(reportProgressRows.map((record) => record.competency))].filter((name) => !catalog.some((item) => item.key === name));
+											return legacy.length ? <div className='overflow-x-auto rounded-lg border'>
+												<h4 className='bg-muted/30 px-4 py-2 text-sm font-semibold'>Previously entered competencies</h4>
+												<table className='w-full min-w-[640px] text-left text-sm'>
+													<thead className='bg-muted/10 text-xs text-muted-foreground'><tr><th className='px-3 py-2'>Developmental competency</th>{selectedReportRows.map((term) => <th key={term.key} className='w-24 px-3 py-2 text-center'>{term.quarter}</th>)}</tr></thead>
+													<tbody className='divide-y'>{legacy.map((name) => <tr key={name}><td className='px-3 py-2'>{name}</td>{selectedReportRows.map((term) => <td key={term.key} className='px-3 py-2 text-center font-semibold'>{reportProgressRows.find((record) => record.competency === name && periodKeyForSchoolYear(record.grading_period, classRecord.school_year) === periodKeyForSchoolYear(term.key, classRecord.school_year))?.rating ?? "—"}</td>)}</tr>)}</tbody>
+												</table>
+											</div> : null;
+										})()}
+									</div>
+								</section>
+								<section className='overflow-hidden rounded-xl border'>
+									<div className='border-b p-4'>
+										<h3 className='font-semibold'>Attendance record</h3>
+										<p className='mt-1 text-xs text-muted-foreground'>Attendance is based on saved pupil attendance entries only; it does not represent scheduled class days.</p>
+									</div>
+									<div className='overflow-x-auto'>
+										<table className='w-full min-w-[640px] text-left text-sm'>
+											<thead className='bg-muted/40 text-xs uppercase text-muted-foreground'><tr><th className='px-4 py-3'>Month</th><th className='px-4 py-3'>Days recorded</th><th className='px-4 py-3'>Present</th><th className='px-4 py-3'>Absent</th><th className='px-4 py-3'>Excused</th></tr></thead>
+											<tbody className='divide-y'>{gradeOneAttendanceMonths.map((month) => <tr key={month.name}><td className='px-4 py-2.5 font-medium'>{month.name}</td><td className='px-4 py-2.5'>{month.daysRecorded || "—"}</td><td className='px-4 py-2.5'>{month.daysRecorded ? month.present : "—"}</td><td className='px-4 py-2.5'>{month.daysRecorded ? month.absent : "—"}</td><td className='px-4 py-2.5'>{month.daysRecorded ? month.excused : "—"}</td></tr>)}</tbody>
+											<tfoot className='border-t bg-muted/20 font-semibold'><tr><td className='px-4 py-3'>Total recorded</td><td className='px-4 py-3'>{kinderAttendanceTotals.daysRecorded}</td><td className='px-4 py-3'>{kinderAttendanceTotals.present}</td><td className='px-4 py-3'>{kinderAttendanceTotals.absent}</td><td className='px-4 py-3'>{kinderAttendanceTotals.excused}</td></tr></tfoot>
+										</table>
+									</div>
+								</section>
+							</div>
 						)}
 					</div>
 				</div>

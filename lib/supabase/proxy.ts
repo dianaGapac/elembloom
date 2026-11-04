@@ -10,7 +10,7 @@ export async function updateSession(request: NextRequest) {
   )
   const { data: { user } } = await supabase.auth.getUser()
   const pathname = request.nextUrl.pathname
-  const publicRoutes = new Set(["/login", "/register", "/forgot-password", "/auth/callback"])
+  const publicRoutes = new Set(["/login", "/register", "/forgot-password", "/reset-password", "/auth/callback"])
   const isPublicRoute = publicRoutes.has(pathname)
   const isProtectedRoute = pathname === "/dashboard" || pathname.startsWith("/classes") || pathname.startsWith("/pupils") || pathname.startsWith("/academic-records") || pathname.startsWith("/academic-activities") || pathname.startsWith("/risk-assessment") || pathname.startsWith("/interventions") || pathname.startsWith("/settings") || pathname.startsWith("/profile") || pathname.startsWith("/parent-notifications") || pathname.startsWith("/reports")
 
@@ -21,7 +21,7 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url)
   }
 
-  if (user && isPublicRoute && pathname !== "/auth/callback") {
+  if (user && isPublicRoute && pathname !== "/auth/callback" && pathname !== "/reset-password") {
     const url = request.nextUrl.clone()
     url.pathname = "/dashboard"
     url.search = ""

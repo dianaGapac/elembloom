@@ -14,9 +14,13 @@ export default function ForgotPasswordPage() {
 		setError("");
 		const { error } = await createClient().auth.resetPasswordForEmail(
 			email.trim(),
-			{ redirectTo: `${window.location.origin}/auth/callback` },
+			{ redirectTo: `${window.location.origin}/auth/callback?next=/reset-password` },
 		);
-		if (error) setError("We couldn't send the reset email. Please try again.");
+		if (error) setError(
+			error.message.toLowerCase().includes("rate limit")
+				? "Too many email requests were made. Please wait before requesting another reset email."
+				: "We couldn't send the reset email. Please try again.",
+		);
 		else setSent(true);
 	}
 	return (

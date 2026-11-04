@@ -10,7 +10,7 @@ import { DEFAULT_PAGE_SIZE, Pagination } from "@/components/ui/pagination"
 import { matchesPupilGender, PupilGenderFilter, sortPupilsAlphabetically, type PupilGenderFilterValue } from "@/components/pupils/gender-filter"
 import { calculateGrade, type GradingPolicy } from "@/lib/grading-engine"
 import { buildClassRecordCsv, downloadClassRecordWorkbook, downloadCsv, type ExportAssessment, type ExportRow } from "@/lib/class-records-export"
-import { academicCategories as categories, categoryWeightsFor, earlyLearningPolicies, gradeLevelLabel, gradeOnePaceCompetenciesForSubject, gradingPeriodsForGrade, periodKeyForSchoolYear, type CategoryWeights } from "@/lib/academic-structure"
+import { academicCategories as categories, categoryWeightsFor, earlyLearningPolicies, gradeLevelLabel, gradeOnePaceCompetenciesForSubject, gradingPeriodsForGrade, kinderCompetencyList, periodKeyForSchoolYear, type CategoryWeights } from "@/lib/academic-structure"
 
 const supabase = createClient()
 const fallbackCategory = (type: string) => (["Project", "Performance Task", "Performance Tasks", "Product/Performance Tasks", "Product / Performance Tasks"].includes(type) ? "Product/Performance Tasks" : ["Quarterly Exam", "Quarterly Examination", "Periodic Examination", "Quarterly Assessment", "Examinations"].includes(type) ? "Examinations" : "Written/Oral Works")
@@ -116,8 +116,12 @@ export default function ClassRecordsPage() {
   const paceCompetencies = selectedClass?.grade_level === 1
     ? gradeOnePaceCompetenciesForSubject(selectedSubject?.subject_name, selectedPeriod)
     : []
+  const kinderCompetencies = selectedClass?.grade_level === 0
+    ? kinderCompetencyList().map((item) => item.key)
+    : []
   const competencyNames = [...new Set([
     ...paceCompetencies,
+    ...kinderCompetencies,
     ...competencyRecords.map((item) => item.competency).filter((name) => !paceCompetencies.includes(name)),
   ])]
   const competencyPupils = sortPupilsAlphabetically((data?.students ?? []).filter((student) =>

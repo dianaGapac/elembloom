@@ -9,7 +9,7 @@ export const trimesterPeriods: PeriodDefinition[] = [
   { order: 3, key: "T3", label: "Third Term" },
 ]
 
-export type EarlyLearningRating = { value: string; label: string; description: string }
+export type EarlyLearningRating = { value: string; label: string; description: string; indicators?: string[] }
 
 export const earlyLearningPolicies: Record<0 | 1, {
   name: string
@@ -18,11 +18,11 @@ export const earlyLearningPolicies: Record<0 | 1, {
 }> = {
   0: {
     name: "Kindergarten competency progress",
-    description: "Rate developmental competencies each term. Do not calculate a numeric subject grade or transmute ratings.",
+    description: "Record each Kindergarten Curriculum Guide competency by developmental domain each term. Do not calculate a numeric subject grade or transmute ratings.",
     ratings: [
-      { value: "CO", label: "Consistent", description: "Always demonstrates the expected competency." },
-      { value: "DV", label: "Developing", description: "Sometimes demonstrates the competency." },
-      { value: "BG", label: "Beginning", description: "Rarely demonstrates the expected competency." },
+      { value: "CO", label: "Consistent", description: "Always demonstrates the expected competency.", indicators: ["Always participates in activities and works independently.", "Always performs tasks; advanced in some aspects."] },
+      { value: "DV", label: "Developing", description: "Sometimes demonstrates the competency.", indicators: ["Sometimes participates with minimal supervision.", "Progresses continuously in assigned tasks."] },
+      { value: "BG", label: "Beginning", description: "Rarely demonstrates the expected competency.", indicators: ["Rarely participates or initiates independent work.", "Shows interest in tasks but needs close supervision."] },
     ],
   },
   1: {
@@ -36,6 +36,108 @@ export const earlyLearningPolicies: Record<0 | 1, {
       { value: "E", label: "Emerging", description: "Nagsisimula" },
     ],
   },
+}
+
+export type KinderCompetencyDomain = {
+  name: string
+  competencies: string[]
+}
+
+export const kinderCompetencyDomains: KinderCompetencyDomain[] = [
+  {
+    name: "I. Sensory Perceptual and Motor Development",
+    competencies: [
+      "1. Identifies external body parts and their functions",
+      "2. Identifies ways to care for and protects one’s body",
+      "3. Demonstrates gross motor skills (locomotor, non-locomotor)",
+      "4. Moves body parts as directed",
+      "5. Demonstrates fine motor skills (tearing, cutting, rolling, molding with playdough)",
+    ],
+  },
+  {
+    name: "II. Socio-emotional Development",
+    competencies: [
+      "1. Identifies and expresses feelings in appropriate ways",
+      "2. Recognizes and respect feelings of others",
+      "3. Expresses needs and preferences",
+      "4. Behaves appropriately in different situations",
+      "5. Participates in classroom routines and activities",
+      "6. Follows classroom and school rules",
+      "7. Fulfills classroom responsibilities",
+    ],
+  },
+  {
+    name: "III. Cognitive Development",
+    competencies: [
+      "1. Identifies attributes of objects (color, shape, size)",
+      "2. Matches objects based on attributes",
+      "3. Describes objects based on attributes (shape, color, taste, texture)",
+      "4. Classifies objects by a single attribute (color, shape, size)",
+      "5. Reclassifies objects according to multiple attributes",
+      "6. Arranges objects according to specific attributes",
+      "7. Recognizes, extends and create patterns using concrete objects",
+      "8. Measures size, length, capacity and mass of objects using non-standard measuring tools",
+      "9. Identifies position of objects (in, on, over, under, top, bottom)",
+      "10. Compares quantities of objects (more/less)",
+      "11. Counts with one-to-one correspondence",
+      "12. Recognizes numerals",
+      "13. Matches numerals to objects",
+      "14. Adds and subtracts using concrete objects",
+      "15. Recognizes clock as measure of time (hours and minutes)",
+      "16. Shows awareness and care for the natural and physical environment",
+      "17. Talks about participation in cultural and religious activities",
+      "18. Shows awareness of the importance of caring for the natural and physical environment through simple practices (e.g., sorting trash, helping to clean up)",
+      "19. Predicts outcomes in familiar stories read aloud in class",
+      "20. Suggests solutions to problems in class activities and stories read aloud in class",
+    ],
+  },
+  {
+    name: "IV. Language, Literacy, and Communication Development",
+    competencies: [
+      "A. Listening and Viewing — 1. Identifies familiar environmental sound",
+      "A. Listening and Viewing — 2. Recalls what happens first, middle and end in a story",
+      "A. Listening and Viewing — 3. Retells story in sequence",
+      "A. Listening and Viewing — 4. Follows 1-2 step instructions",
+      "B. Sight Word Recognition — 5. Recognizes non-decodable words in and out of context automatically",
+      "B. Sight Word Recognition — 6. Recognizes sight words",
+      "C. Speaking — 7. Identifies first and last name",
+      "C. Speaking — 8. Identifies classmates, teachers, family member",
+      "C. Speaking — 9. Identifies familiar objects at home, in school and in the community",
+      "C. Speaking — 10. Uses polite greetings and courteous expressions in varied situations",
+      "C. Speaking — 11. Retells personal experiences to story events",
+      "C. Speaking — 12. Expresses ideas and feelings using phrases and simple sentences",
+      "D. Reading · Phonological/Phonemic Awareness — 13. Orally segment sounds: syllable, onset and rime, phoneme by phoneme",
+      "D. Reading · Letter Knowledge — 14. Identifies uppercase letters",
+      "D. Reading · Letter Knowledge — 15. Identifies lowercase letters",
+      "D. Reading · Letter Knowledge — 16. Matches upper and lowercase letters",
+      "D. Reading · Letter Sound Relationship — 17. Identifies letter sounds",
+      "D. Reading · Letter Sound Relationship — 18. Matches letters and their corresponding sounds",
+      "E. Comprehension — 19. Uses a variety of strategies to gain meaning of leveled texts",
+      "E. Comprehension — 20. Uses print and illustrations to make meaning",
+      "F. Concepts of Print — 21. Demonstrates book handling skills",
+      "F. Concepts of Print — 22. Distinguishes between letters, words, and sentences",
+      "F. Concepts of Print — 23. Demonstrates awareness of print (left to right and top to bottom)",
+      "G. Writing — 24. Traces/draws/copies shapes, designs, pictures",
+      "G. Writing — 25. Traces/copies/writes name, words",
+      "G. Writing — 26. Writes uppercase and lowercase letters",
+      "G. Writing — 27. Spells sight words",
+      "G. Writing — 28. Spells simple words phonetically",
+    ],
+  },
+]
+
+export function kinderCompetencyKey(domain: string, competency: string) {
+  return `${domain} — ${competency}`
+}
+
+export function kinderCompetencyList() {
+  return kinderCompetencyDomains.flatMap((domain) =>
+    domain.competencies.map((competency) => ({
+      domain: domain.name,
+      competency,
+      key: kinderCompetencyKey(domain.name, competency),
+    })),
+  )
 }
 
 const gradeOnePaceCompetencies: Record<string, string[]> = {

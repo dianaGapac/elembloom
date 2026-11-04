@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { createClient as createServerClient } from "@/lib/supabase/server"
+import { getCentralGmailCredentials, sendWithCentralGmail } from "@/lib/server/gmail"
 
 type ParentEmailBody = {
   studentId?: string
@@ -71,32 +72,19 @@ export async function POST(request: Request) {
     }
   }
 
-  const { data: connection, error: connectionError } = await service.from("google_mail_connections").select("email,refresh_token").eq("teacher_id", user.id).maybeSingle()
-  if (connectionError) return NextResponse.json({ error: "Unable to load the connected Gmail account." }, { status: 500 })
-  if (!connection) return NextResponse.json({ error: "Connect Google Gmail before sending parent messages." }, { status: 409 })
-  const clientId = "318513417945-dsibjjqvu0pu5efs10u9ioiha25usl37.apps.googleusercontent.com"
-  const clientSecret = process.env.secret
-  if (!clientSecret) return NextResponse.json({ error: "Google OAuth secret is not available on the server." }, { status: 503 })
-
-  const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: connection.refresh_token,
-      grant_type: "refresh_token",
-    }),
-  })
-  const token = await tokenResponse.json() as { access_token?: string; error?: string }
-  if (!tokenResponse.ok || !token.access_token) return NextResponse.json({ error: token.error ?? "Gmail authorization expired. Reconnect Google." }, { status: 502 })
+  let gmailCredentials: Awaited<ReturnType<typeof getCentralGmailCredentials>>
+  try {
+    gmailCredentials = await getCentralGmailCredentials()
+  } catch (gmailError) {
+    return NextResponse.json({ error: gmailError instanceof Error ? gmailError.message : "The central Gmail account is unavailable." }, { status: 503 })
+  }
 
   const escapeHtml = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;")
   const logoUrl = new URL("/logo.png", request.url).toString()
   const emailHtml = `<!doctype html><html><body style="margin:0;background:#f4f7f6;font-family:Arial,Helvetica,sans-serif;color:#24322d"><div style="max-width:640px;margin:0 auto;padding:32px 16px"><div style="background:#2e8b57;padding:16px 28px;border-radius:14px 14px 0 0"><div style="display:inline-block;background:#ffffff;border-radius:8px;padding:4px 10px"><img src="${escapeHtml(logoUrl)}" width="136" alt="ElemBloom" style="display:block;width:136px;height:auto;border:0"></div><div style="margin-top:9px;color:#e8f5ec;font-size:13px">Supporting every learner’s growth</div></div><div style="background:#ffffff;padding:30px 28px;border:1px solid #dce8e2;border-top:0;border-radius:0 0 14px 14px"><div style="white-space:pre-wrap;font-size:15px;line-height:1.7">${escapeHtml(body.message)}</div><div style="margin-top:28px;padding-top:18px;border-top:1px solid #e5eee9;color:#62736b;font-size:12px;line-height:1.5">This message was sent through ElemBloom’s secure family communication system. Please contact your child’s teacher if you have questions about this update.</div></div><div style="padding:18px;text-align:center;color:#84938c;font-size:11px">ElemBloom · Learning progress, shared with care</div></div></body></html>`
   const headers = [
     `To: ${student.parent_guardian_email}`,
-    `From: ${connection.email ?? "me"}`,
+    `From: ${gmailCredentials.senderEmail}`,
     `Subject: =?UTF-8?B?${Buffer.from(body.subject, "utf8").toString("base64")}?=`,
     "MIME-Version: 1.0",
   ]
@@ -126,13 +114,14 @@ export async function POST(request: Request) {
   }
   const raw = [...headers, "", mimeBody].join("\r\n")
   const encoded = Buffer.from(raw).toString("base64url")
-  const gmailResponse = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token.access_token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ raw: encoded }),
-  })
-  const gmail = await gmailResponse.json() as { id?: string; error?: { message?: string } }
-  const status = gmailResponse.ok ? "sent" : "failed"
+  let gmail: { id?: string } | null = null
+  let sendErrorMessage: string | null = null
+  try {
+    gmail = await sendWithCentralGmail(encoded, gmailCredentials)
+  } catch (sendError) {
+    sendErrorMessage = sendError instanceof Error ? sendError.message : "Gmail could not send the message."
+  }
+  const status = gmail ? "sent" : "failed"
   const { error: logError } = await service.from("parent_communications").insert({
     teacher_id: user.id,
     student_id: body.studentId,
@@ -142,11 +131,11 @@ export async function POST(request: Request) {
     body: body.message,
     message_type: body.type ?? "initial",
     status,
-    gmail_message_id: gmail.id ?? null,
-    error_message: gmail.error?.message ?? null,
-    sent_at: gmailResponse.ok ? new Date().toISOString() : null,
+    gmail_message_id: gmail?.id ?? null,
+    error_message: sendErrorMessage,
+    sent_at: gmail ? new Date().toISOString() : null,
   })
   if (logError) console.error("Unable to record parent communication", { teacherId: user.id, studentId: student.id, error: logError.message })
-  if (!gmailResponse.ok) return NextResponse.json({ error: gmail.error?.message ?? "Gmail could not send the message." }, { status: 502 })
+  if (!gmail) return NextResponse.json({ error: sendErrorMessage ?? "Gmail could not send the message." }, { status: 502 })
   return NextResponse.json({ ok: true, messageId: gmail.id, logged: !logError })
 }
