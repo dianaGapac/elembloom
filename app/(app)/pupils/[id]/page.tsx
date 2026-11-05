@@ -34,6 +34,7 @@ import {
 } from "@/lib/academic-structure";
 import jsPDF from "jspdf";
 import { Button } from "@/components/ui/button";
+import { TrendChart } from "@/components/ui/trend-chart";
 
 type Student = {
 	id: string;
@@ -367,6 +368,22 @@ export default function PupilDetails({
 					},
 				],
 	);
+	const performanceTrend = assessments
+		.flatMap((item) => {
+			const score = scoreForStudent(item);
+			const total = Number(item.total_points);
+			if (score == null || !Number.isFinite(total) || total <= 0) return [];
+			const value = (Number(score) / total) * 100;
+			return Number.isFinite(value)
+				? [{ label: item.title, value, date: item.assessment_date }]
+				: [];
+		})
+		.sort((a, b) => a.date.localeCompare(b.date))
+		.map(({ label, value }, index) => ({
+			label: String(index + 1),
+			value,
+			tooltip: label,
+		}));
 	const average =
 		!isCompetencyClass && scored.length
 			? Math.round(
@@ -1646,8 +1663,9 @@ export default function PupilDetails({
 							Average score by subject from recorded assessments.
 						</p>
 					</div>
+					<div className='grid gap-5 p-5 lg:grid-cols-2'>
 					{subjectAverages.length ? (
-						<div className='flex flex-col gap-5 p-5'>
+						<div className='flex flex-col gap-5'>
 							{subjectAverages.map((item) => (
 								<div key={item.name}>
 									<div className='mb-2 flex justify-between text-sm'>
@@ -1664,10 +1682,18 @@ export default function PupilDetails({
 							))}
 						</div>
 					) : (
-						<div className='p-10 text-center text-sm text-muted-foreground'>
+						<div className='p-6 text-center text-sm text-muted-foreground'>
 							No academic scores available
 						</div>
 					)}
+					<TrendChart
+						title="Performance trend"
+						points={performanceTrend}
+						emptyMessage="No scored assessments match the selected subject and term."
+						caption="Assessment score (%) · hover over a point for the activity name"
+						compact
+					/>
+					</div>
 				</div>
 			</div>
 			<div className='rounded-xl border bg-card'>

@@ -408,6 +408,27 @@ export default function RiskAssessmentPage() {
 		selected && data
 			? riskSettingsForStudent(selected, data, schoolYear)
 			: null;
+	const selectedRiskTrend = useMemo(() => {
+		if (!selected || !data) return [];
+		const studentClass = classes.find((item) => item.id === selected.class_id);
+		if (!studentClass) return [];
+		return periodOptionsForSchoolYear(studentClass.school_year)
+			.map((item) => {
+				const risk = classifyRisk(
+					selected,
+					{
+						...data,
+						settings: riskSettingsForStudent(selected, data, studentClass.school_year),
+					},
+					studentClass.school_year,
+					item.short_label,
+				);
+				return risk.level === "incomplete"
+					? null
+					: { label: item.display_name, value: risk.totalPoints };
+			})
+			.filter((point): point is { label: string; value: number } => point !== null);
+	}, [selected, data, classes]);
 	if (isLoading)
 		return (
 			<section className='mx-auto max-w-7xl p-6'>
@@ -938,6 +959,16 @@ export default function RiskAssessmentPage() {
 									{selectedRisk.absences}
 								</p>
 							</div>
+						</div>
+						<div className='mt-6'>
+							<TrendChart
+								title='Risk points by grading period'
+								points={selectedRiskTrend}
+								maxValue={11}
+								valueSuffix=' pts'
+								caption='Points from triggered academic and attendance rules; lower values indicate fewer current flags'
+								emptyMessage='No grading periods have enough assessment and attendance data to show a risk-point trend.'
+							/>
 						</div>
 						<div className='mt-6 rounded-xl border bg-muted/20 p-4'>
 							<div className='flex flex-wrap items-start justify-between gap-3'>

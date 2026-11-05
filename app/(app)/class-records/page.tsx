@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { DEFAULT_PAGE_SIZE, Pagination } from "@/components/ui/pagination"
 import { matchesPupilGender, PupilGenderFilter, sortPupilsAlphabetically, type PupilGenderFilterValue } from "@/components/pupils/gender-filter"
 import { calculateGrade, type GradingPolicy } from "@/lib/grading-engine"
-import { buildClassRecordCsv, downloadClassRecordWorkbook, downloadCsv, type ExportAssessment, type ExportRow } from "@/lib/class-records-export"
+import { buildClassRecordCsv, buildFinalGradesCsv, buildFinalProgressCsv, buildProgressRecordCsv, downloadClassRecordWorkbook, downloadCsv, downloadFinalGradesWorkbook, downloadFinalProgressWorkbook, downloadProgressRecordWorkbook, type ExportAssessment, type ExportRow, type FinalGradeExportRow, type FinalProgressExportRow, type ProgressExportRow } from "@/lib/class-records-export"
 import { academicCategories as categories, categoryWeightsFor, earlyLearningPolicies, gradeLevelLabel, gradeOnePaceCompetenciesForSubject, gradingPeriodsForGrade, kinderCompetencyList, periodKeyForSchoolYear, type CategoryWeights } from "@/lib/academic-structure"
 
 const supabase = createClient()
@@ -139,7 +139,7 @@ export default function ClassRecordsPage() {
     const configFor = (periodValue: string): GradingPolicy => { const config = data.configs.find((item) => item.class_subject_id === selectedSubject.id && item.school_year === selectedClass.school_year && periodKeyForSchoolYear(item.grading_period, selectedClass.school_year) === periodKeyForSchoolYear(periodValue, selectedClass.school_year)); return config ? { passingGrade: Number(config.passing_grade), decimalPlaces: Number(config.decimal_places), roundingMethod: config.rounding_method as GradingPolicy["roundingMethod"], useTransmutation: Number(selectedClass.school_year.match(/\d{4}/)?.[0]) >= 2026, weights: { "Written/Oral Works": Number(config.written_work_weight), "Product/Performance Tasks": Number(config.performance_tasks_weight), Examinations: Number(config.quarterly_exam_weight) } } : { passingGrade: 75, decimalPlaces: 2, roundingMethod: "half_up", useTransmutation: Number(selectedClass.school_year.match(/\d{4}/)?.[0]) >= 2026, weights: categoryWeightsFor(selectedClass.grade_level, selectedSubject.subject_name) } }
     const pupils = sortPupilsAlphabetically(data.students.filter((student) => student.class_id === selectedClass.id && data.enrollments.some((item) => item.class_id === selectedClass.id && item.student_id === student.id)))
     const buildRows = (periodValue: string): { rows: RecordRow[]; assessments: ExportAssessment[] } => { const normalizedPeriod = periodKeyForSchoolYear(periodValue, selectedClass.school_year); const assessments = data.assessments.filter((item) => item.class_id === selectedClass.id && item.subject === selectedSubject.subject_name && periodKeyForSchoolYear(item.grading_period, selectedClass.school_year) === normalizedPeriod && item.school_year === selectedClass.school_year); const exportAssessments = assessments.map((item) => ({ id: item.id, title: item.title, category: item.grading_category ? fallbackCategory(item.grading_category) : fallbackCategory(item.assessment_type), totalPoints: Number(item.total_points), assessmentDate: item.activity_date || item.assessment_date })); const rows = pupils.map((student) => { const result = calculateGrade(student.id, assessments.map((item) => ({ id: item.id, assessmentType: item.assessment_type, gradingCategory: item.grading_category, gradingPeriod: periodKeyForSchoolYear(item.grading_period, selectedClass.school_year) ?? item.grading_period, subject: item.subject, totalPoints: Number(item.total_points) })), data.scores.map((score) => ({ assessmentId: score.assessment_id, studentId: score.student_id, score: score.score === null ? null : Number(score.score) })), configFor(periodValue), selectedSubject.subject_name, normalizedPeriod ?? undefined); return { studentId: student.id, studentNumber: student.student_number, learnerName: `${student.last_name}, ${student.first_name}`, gender: student.gender, scores: Object.fromEntries(assessments.map((item) => [item.id, data.scores.find((score) => score.assessment_id === item.id && score.student_id === student.id)?.score ?? null])), componentPercentages: Object.fromEntries(result.categories.map((category) => [category.name, category.average])), initialGrade: result.weightedPercentage, termGrade: result.transmutedGrade, descriptor: result.descriptor, status: result.remark, categories: Object.fromEntries(result.categories.map((category) => [category.name, { rawRecorded: category.rawRecorded, rawTotal: category.rawTotal, average: category.average, contribution: category.contribution }])) } }); return { rows, assessments: exportAssessments } }
-    const current = buildRows(selectedPeriod); const summary = pupils.map((student) => { const periodGrades = periods.map((item) => { const periodRows = buildRows(item.short_label).rows.find((row) => row.studentId === student.id); return { label: item.short_label, grade: periodRows?.termGrade ?? null, status: periodRows?.status ?? "Incomplete" } }); return { ...student, periodGrades } }); return { ...current, summary }
+    const current = buildRows(selectedPeriod); const summary = pupils.map((student) => { const periodGrades = periods.map((item) => { const periodRows = buildRows(item.short_label).rows.find((row) => row.studentId === student.id); return { label: item.short_label, grade: periodRows?.termGrade ?? null, descriptor: periodRows?.descriptor ?? null, remarks: periodRows?.status ?? "Incomplete" } }); return { ...student, periodGrades } }); return { ...current, summary }
   }, [data, selectedClass, selectedSubject, selectedPeriod, periods])
 
   const topTenIds = new Set((prepared?.rows ?? []).filter((row) => row.termGrade !== null).sort((a, b) => (b.termGrade ?? 0) - (a.termGrade ?? 0) || a.learnerName.localeCompare(b.learnerName)).slice(0, 10).map((row) => row.studentId))
@@ -147,8 +147,148 @@ export default function ClassRecordsPage() {
   const visibleRows = prepared?.rows.filter((row) => matchesPupilGender(row.gender, genderFilter)).filter((row) => !topTenOnly || topTenIds.has(row.studentId)).filter((row) => row.learnerName.toLowerCase().includes(search.toLowerCase()) || row.studentNumber.toLowerCase().includes(search.toLowerCase())).filter((row) => statusFilter === "all" || (statusFilter === "missing" ? row.status === "Incomplete" : statusFilter === "complete" ? row.status !== "Incomplete" : row.status === "Needs support")).sort((a, b) => sort === "grade-desc" ? (b.termGrade ?? -1) - (a.termGrade ?? -1) || a.learnerName.localeCompare(b.learnerName) : sort === "grade-asc" ? (a.termGrade ?? Number.POSITIVE_INFINITY) - (b.termGrade ?? Number.POSITIVE_INFINITY) || a.learnerName.localeCompare(b.learnerName) : a.learnerName.localeCompare(b.learnerName)) ?? []
   const pageRows = visibleRows.slice((page - 1) * DEFAULT_PAGE_SIZE, page * DEFAULT_PAGE_SIZE)
   const filenameBase = selectedClass && selectedSubject ? `ElemBloom_Grade${selectedClass.grade_level}_${selectedClass.section_name}_${selectedSubject.subject_name}_${selectedPeriod}_${selectedClass.school_year}`.replaceAll(/[^a-zA-Z0-9_-]/g, "_") : "ElemBloom_Class_Record"
-  function exportCsv() { if (prepared) downloadCsv(`${filenameBase}.csv`, buildClassRecordCsv(prepared.rows, prepared.assessments)); setExportOpen(false) }
-  function exportExcel() { if (prepared && selectedClass && selectedSubject) downloadClassRecordWorkbook(`${filenameBase}.xlsx`, prepared.rows, prepared.assessments, selectedPeriod, { classLabel: `${gradeLevelLabel(selectedClass.grade_level)} – ${selectedClass.section_name}`, subject: selectedSubject.subject_name, schoolYear: selectedClass.school_year, weights: savedWeights ?? fallbackWeights }); setExportOpen(false) }
+  const summaryPeriods = periods.filter((item) => !("legacy" in item && item.legacy))
+  const finalGradeRows: FinalGradeExportRow[] = (prepared?.summary ?? []).map((row) => ({
+    studentNumber: row.student_number,
+    learnerName: `${row.last_name}, ${row.first_name}`,
+    periodGrades: row.periodGrades.map(({ label, grade, descriptor, remarks }) => ({ label, grade, descriptor, remarks })),
+  }))
+  const progressExportRows: ProgressExportRow[] = competencyPupils.map((student) => {
+    const report = termReports.find((item) => item.student_id === student.id)
+    return {
+      studentNumber: student.student_number,
+      learnerName: `${student.last_name}, ${student.first_name}`,
+      competencies: Object.fromEntries(competencyNames.map((name) => {
+        const rating = competencyRecords.find((item) => item.student_id === student.id && item.competency === name)?.rating
+        const descriptor = earlyLearningPolicies[selectedClass?.grade_level as 0 | 1]?.ratings.find((item) => item.value === rating)
+        return [name, rating ? `${rating}${descriptor ? ` — ${descriptor.label}` : ""}` : ""]
+      })),
+      whatChildCanDo: report?.what_child_can_do ?? "",
+      learningToImprove: report?.learning_to_improve ?? "",
+      teacherComments: report?.teacher_comments ?? "",
+    }
+  })
+  const finalProgressRows: FinalProgressExportRow[] = competencyPupils.map((student) => ({
+    studentNumber: student.student_number,
+    learnerName: `${student.last_name}, ${student.first_name}`,
+    terms: summaryPeriods.map((term) => {
+      const termCompetencies = selectedClass?.grade_level === 1
+        ? gradeOnePaceCompetenciesForSubject(selectedSubject?.subject_name, term.short_label)
+        : kinderCompetencies
+      const records = (data?.competencies ?? []).filter((record) =>
+        record.class_id === selectedClass?.id &&
+        record.subject_offering_id === selectedSubject?.id &&
+        record.student_id === student.id &&
+        periodKeyForSchoolYear(record.grading_period, selectedClass?.school_year) === periodKeyForSchoolYear(term.short_label, selectedClass?.school_year),
+      )
+      const report = (data?.reports ?? []).find((item) =>
+        item.class_id === selectedClass?.id &&
+        item.student_id === student.id &&
+        item.school_year === selectedClass?.school_year &&
+        periodKeyForSchoolYear(item.grading_period, selectedClass?.school_year) === periodKeyForSchoolYear(term.short_label, selectedClass?.school_year),
+      )
+      const policy = earlyLearningPolicies[selectedClass?.grade_level as 0 | 1]
+      return {
+        label: term.display_name,
+        competencies: Object.fromEntries(termCompetencies.flatMap((name) => {
+          const rating = records.find((record) => record.competency === name)?.rating
+          const descriptor = policy?.ratings.find((item) => item.value === rating)
+          return rating ? [[name, `${rating}${descriptor ? ` — ${descriptor.label}` : ""}`]] : []
+        })),
+        whatChildCanDo: report?.what_child_can_do ?? "",
+        learningToImprove: report?.learning_to_improve ?? "",
+        teacherComments: report?.teacher_comments ?? "",
+      }
+    }),
+  }))
+  const progressSummaryRows = competencyPupils.map((student) => ({
+    id: student.id,
+    studentNumber: student.student_number,
+    learnerName: `${student.last_name}, ${student.first_name}`,
+    first_name: student.first_name,
+    last_name: student.last_name,
+    gender: student.gender,
+    terms: finalProgressRows.find((row) => row.studentNumber === student.student_number)?.terms.map((term) => {
+      const termCompetencies = selectedClass?.grade_level === 1
+        ? gradeOnePaceCompetenciesForSubject(selectedSubject?.subject_name, summaryPeriods.find((item) => item.display_name === term.label)?.short_label)
+        : kinderCompetencies
+      const termKey = periodKeyForSchoolYear(summaryPeriods.find((item) => item.display_name === term.label)?.short_label, selectedClass?.school_year)
+      const termRecords = (data?.competencies ?? []).filter((record) =>
+        record.class_id === selectedClass?.id &&
+        record.subject_offering_id === selectedSubject?.id &&
+        record.student_id === student.id &&
+        periodKeyForSchoolYear(record.grading_period, selectedClass?.school_year) === termKey,
+      )
+      const ratingCounts = Object.fromEntries(earlyLearningPolicies[selectedClass?.grade_level as 0 | 1].ratings.map((rating) => [
+        rating.value,
+        termRecords.filter((record) => record.rating === rating.value && termCompetencies.includes(record.competency)).length,
+      ]))
+      return {
+        label: term.label,
+        ratedCount: termCompetencies.filter((name) => termRecords.some((record) => record.competency === name)).length,
+        totalCompetencies: termCompetencies.length,
+        ratingCounts,
+        narrativeEntered: Boolean(term.whatChildCanDo.trim() || term.learningToImprove.trim() || term.teacherComments.trim()),
+      }
+    }) ?? [],
+  }))
+  const summaryFilename = selectedClass && selectedSubject
+    ? `ElemBloom_Grade${selectedClass.grade_level}_${selectedClass.section_name}_${selectedSubject.subject_name}_Final_Grades_${selectedClass.school_year}`.replaceAll(/[^a-zA-Z0-9_-]/g, "_")
+    : "ElemBloom_Final_Grades"
+  const progressFilename = selectedClass && selectedSubject
+    ? `ElemBloom_Grade${selectedClass.grade_level}_${selectedClass.section_name}_${selectedSubject.subject_name}_${selectedPeriod}_${selectedClass.school_year}_Progress_Records`.replaceAll(/[^a-zA-Z0-9_-]/g, "_")
+    : "ElemBloom_Progress_Records"
+  function exportCsv() {
+    if (isProgressClass && selectedClass && selectedSubject) {
+      if (view === "summary") {
+        downloadCsv(`${progressFilename.replace("_Progress_Records", "_Final_Progress_Summary")}.csv`, buildFinalProgressCsv(finalProgressRows))
+      } else {
+        downloadCsv(`${progressFilename}.csv`, buildProgressRecordCsv(progressExportRows, competencyNames))
+      }
+    } else if (prepared) {
+      downloadCsv(
+        `${view === "summary" ? summaryFilename : filenameBase}.csv`,
+        view === "summary"
+          ? buildFinalGradesCsv(finalGradeRows, summaryPeriods)
+          : buildClassRecordCsv(prepared.rows, prepared.assessments),
+      )
+    }
+    setExportOpen(false)
+  }
+  function exportExcel() {
+    if (isProgressClass && selectedClass && selectedSubject) {
+      if (view === "summary") {
+        downloadFinalProgressWorkbook(`${progressFilename.replace("_Progress_Records", "_Final_Progress_Summary")}.xlsx`, finalProgressRows, {
+          classLabel: `${gradeLevelLabel(selectedClass.grade_level)} – ${selectedClass.section_name}`,
+          subject: selectedSubject.subject_name,
+          schoolYear: selectedClass.school_year,
+        })
+      } else {
+        downloadProgressRecordWorkbook(`${progressFilename}.xlsx`, progressExportRows, competencyNames, {
+          classLabel: `${gradeLevelLabel(selectedClass.grade_level)} – ${selectedClass.section_name}`,
+          subject: selectedSubject.subject_name,
+          term: periods.find((item) => item.short_label === selectedPeriod)?.display_name ?? selectedPeriod,
+          schoolYear: selectedClass.school_year,
+        })
+      }
+    } else if (prepared && selectedClass && selectedSubject) {
+      if (view === "summary") {
+        downloadFinalGradesWorkbook(`${summaryFilename}.xlsx`, finalGradeRows, summaryPeriods, {
+          classLabel: `${gradeLevelLabel(selectedClass.grade_level)} – ${selectedClass.section_name}`,
+          subject: selectedSubject.subject_name,
+          schoolYear: selectedClass.school_year,
+        })
+      } else {
+        downloadClassRecordWorkbook(`${filenameBase}.xlsx`, prepared.rows, prepared.assessments, selectedPeriod, {
+          classLabel: `${gradeLevelLabel(selectedClass.grade_level)} – ${selectedClass.section_name}`,
+          subject: selectedSubject.subject_name,
+          schoolYear: selectedClass.school_year,
+          weights: savedWeights ?? fallbackWeights,
+        })
+      }
+    }
+    setExportOpen(false)
+  }
   if (isLoading) return <main className="mx-auto max-w-7xl p-6"><p className="text-sm text-muted-foreground">Loading class records…</p></main>
   if (error) return <main className="mx-auto max-w-7xl p-6"><p className="text-sm text-destructive">Unable to load class records.</p></main>
   const quarterAssessments = prepared?.assessments ?? []
@@ -162,13 +302,13 @@ export default function ClassRecordsPage() {
           <h1 className="mt-3 text-3xl font-semibold tracking-tight">Class Records</h1>
           <p className="mt-2 text-sm text-muted-foreground">{isProgressClass ? "View term-based competency ratings for Kinder and Grade 1. Grade 1 uses its PACE A–E scale without numeric grades or transmutation." : "Assessment scores and grades calculated from raw points and saved class policies."}</p>
         </div>
-        {!isProgressClass && <div className="relative">
-          <Button variant="outline" onClick={() => setExportOpen(!exportOpen)} disabled={!prepared}><ArrowDownToLine data-icon="inline-start" />Export <ChevronDown data-icon="inline-end" /></Button>
+        <div className="relative">
+          <Button variant="outline" onClick={() => setExportOpen(!exportOpen)} disabled={isProgressClass ? !selectedClass || !selectedSubject || !data : !prepared}><ArrowDownToLine data-icon="inline-start" />Export <ChevronDown data-icon="inline-end" /></Button>
           {exportOpen && <div className="absolute right-0 z-10 mt-2 w-56 rounded-lg border bg-popover p-1 shadow-lg">
-            <button type="button" className="w-full rounded px-3 py-2 text-left text-sm hover:bg-muted" onClick={exportCsv}>Export CSV</button>
-            <button type="button" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm hover:bg-muted" onClick={exportExcel}><FileSpreadsheet className="size-4" />Export Excel workbook</button>
+            <button type="button" className="w-full rounded px-3 py-2 text-left text-sm hover:bg-muted" onClick={exportCsv}>{isProgressClass ? view === "summary" ? "Export final progress CSV" : "Export progress records CSV" : view === "summary" ? "Export final grades CSV" : "Export CSV"}</button>
+            <button type="button" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm hover:bg-muted" onClick={exportExcel}><FileSpreadsheet className="size-4" />{isProgressClass ? view === "summary" ? "Export final progress Excel" : "Export progress records Excel" : view === "summary" ? "Export final grades Excel" : "Export Excel workbook"}</button>
           </div>}
-        </div>}
+        </div>
       </div>
       <section className="grid gap-3 rounded-xl border bg-card p-4 md:grid-cols-4">
         <label className="text-xs font-medium text-muted-foreground">School Year<select className="mt-1.5 h-10 w-full rounded-md border bg-background px-3 text-sm" value={selectedClass?.school_year ?? ""} onChange={(event) => { const next = classes.find((item) => item.school_year === event.target.value); setClassId(next?.id ?? ""); setSubjectId("") }}>{[...new Set(classes.map((item) => item.school_year))].map((year) => <option key={year}>{year}</option>)}</select></label>
@@ -177,17 +317,23 @@ export default function ClassRecordsPage() {
         <label className="text-xs font-medium text-muted-foreground">Grading Period<select className="mt-1.5 h-10 w-full rounded-md border bg-background px-3 text-sm" value={selectedPeriod} onChange={(event) => setPeriod(event.target.value)}>{periods.map((item) => <option key={item.short_label} value={item.short_label}>{item.display_name}</option>)}</select></label>
       </section>
       {/* {selectedClass && selectedSubject && !isProgressClass && <GradingWeightsPanel key={`${selectedClass.id}:${selectedSubject.id}:${selectedClass.school_year}:${periodKeyForSchoolYear(selectedPeriod, selectedClass.school_year)}`} classId={selectedClass.id} gradeLevel={selectedClass.grade_level} schoolYear={selectedClass.school_year} gradingPeriod={selectedPeriod} savedWeights={savedWeights} fallbackWeights={fallbackWeights} />} */}
-      {/* <div className="flex flex-wrap gap-1 rounded-xl border bg-card p-2">
+      <div className="flex flex-wrap gap-1 rounded-xl border bg-card p-2">
         <button type="button" onClick={() => setView("period")} className={`rounded-lg px-4 py-2 text-sm font-medium ${view === "period" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>{periods.find((item) => item.short_label === selectedPeriod)?.display_name ?? selectedPeriod}</button>
-        {(periods.length ? periods : [{ short_label: "Q1", display_name: "Quarter 1" }, { short_label: "Q2", display_name: "Quarter 2" }, { short_label: "Q3", display_name: "Quarter 3" }, { short_label: "Q4", display_name: "Quarter 4" }]).filter((item) => item.short_label !== selectedPeriod).map((item) => <button type="button" key={item.short_label} onClick={() => { setPeriod(item.short_label); setView("period") }} className="rounded-lg px-4 py-2 text-sm text-muted-foreground hover:bg-muted">{item.display_name}</button>)}
-        {selectedClass?.grade_level > 1 && <button type="button" onClick={() => setView("summary")} className={`rounded-lg px-4 py-2 text-sm font-medium ${view === "summary" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>Term Summary</button>}
-      </div> */}
+        {selectedClass && <button type="button" onClick={() => setView("summary")} className={`rounded-lg px-4 py-2 text-sm font-medium ${view === "summary" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>{isProgressClass ? "Final Progress Summary" : "Final Grades by Term"}</button>}
+      </div>
       <section className="rounded-xl border bg-card p-5">
         <p className="text-sm font-medium text-primary">{gradeLevelLabel(selectedClass?.grade_level)} – {selectedClass?.section_name}</p>
         <h2 className="mt-1 text-2xl font-semibold">{selectedSubject?.subject_name ?? "Choose a subject"}</h2>
         <p className="mt-1 text-sm text-muted-foreground">{selectedClass?.school_year} · {view === "summary" ? "Term Summary" : periods.find((item) => item.short_label === selectedPeriod)?.display_name ?? selectedPeriod}</p>
       </section>
-      {isProgressClass ? <CompetencyRecordTable key={`${selectedClass.id}:${selectedSubject?.id ?? ""}:${selectedPeriod}`} pupils={competencyPupils} competencyNames={competencyNames} records={competencyRecords} reports={termReports} classId={selectedClass.id} subjectId={selectedSubject?.id ?? ""} period={selectedPeriod} gradeLevel={selectedClass.grade_level} subjectName={selectedSubject?.subject_name ?? ""} termName={periods.find((item) => item.short_label === selectedPeriod)?.display_name ?? selectedPeriod} /> : view === "period" ? <section className="overflow-hidden rounded-xl border bg-card">
+      {isProgressClass ? view === "summary" ? <ProgressSummaryTable
+        rows={progressSummaryRows}
+        periods={summaryPeriods}
+        ratings={earlyLearningPolicies[selectedClass.grade_level as 0 | 1].ratings.map((rating) => ({ value: rating.value, label: rating.label }))}
+        search={search}
+        genderFilter={genderFilter}
+        onGenderChange={setGenderFilter}
+      /> : <CompetencyRecordTable key={`${selectedClass.id}:${selectedSubject?.id ?? ""}:${selectedPeriod}`} pupils={competencyPupils} competencyNames={competencyNames} records={competencyRecords} reports={termReports} classId={selectedClass.id} subjectId={selectedSubject?.id ?? ""} period={selectedPeriod} gradeLevel={selectedClass.grade_level} subjectName={selectedSubject?.subject_name ?? ""} termName={periods.find((item) => item.short_label === selectedPeriod)?.display_name ?? selectedPeriod} /> : view === "period" ? <section className="overflow-hidden rounded-xl border bg-card">
         <div className="flex flex-wrap items-end justify-between gap-3 border-b p-4">
           <div>
             <h3 className="font-semibold">{periods.find((item) => item.short_label === selectedPeriod)?.display_name ?? selectedPeriod} class record</h3>
@@ -262,24 +408,106 @@ export default function ClassRecordsPage() {
         </details>
         <Pagination page={page} totalItems={visibleRows.length} onPageChange={setPage} />
         {!visibleRows.length && <p className="p-10 text-center text-sm text-muted-foreground">No pupils match the current filters.</p>}
-      </section> : <SummaryTable summary={prepared?.summary ?? []} periods={periods.filter((item) => !("legacy" in item && item.legacy))} search={search} genderFilter={genderFilter} onGenderChange={setGenderFilter} />}
+      </section> : <SummaryTable summary={prepared?.summary ?? []} periods={summaryPeriods} search={search} genderFilter={genderFilter} onGenderChange={setGenderFilter} />}
     </main>
   )
 }
 
-function SummaryTable({ summary, periods, search, genderFilter, onGenderChange }: { summary: Array<{ student_number: string; first_name: string; last_name: string; gender: string | null; periodGrades: Array<{ label: string; grade: number | null; status: string }> }>; periods: Array<{ short_label: string; display_name: string }>; search: string; genderFilter: PupilGenderFilterValue; onGenderChange: (value: PupilGenderFilterValue) => void }) {
+function SummaryTable({ summary, periods, search, genderFilter, onGenderChange }: { summary: Array<{ student_number: string; first_name: string; last_name: string; gender: string | null; periodGrades: Array<{ label: string; grade: number | null; descriptor: string | null; remarks: string }> }>; periods: Array<{ short_label: string; display_name: string }>; search: string; genderFilter: PupilGenderFilterValue; onGenderChange: (value: PupilGenderFilterValue) => void }) {
   const [page, setPage] = useState(1)
   const rows = sortPupilsAlphabetically(summary.filter((row) => matchesPupilGender(row.gender, genderFilter) && `${row.first_name} ${row.last_name} ${row.student_number}`.toLowerCase().includes(search.toLowerCase())))
   const pageRows = rows.slice((page - 1) * DEFAULT_PAGE_SIZE, page * DEFAULT_PAGE_SIZE)
   return <section className="overflow-hidden rounded-xl border bg-card">
     <div className="flex justify-end border-b p-4"><PupilGenderFilter value={genderFilter} onChange={onGenderChange} /></div>
     <div className="max-h-[70vh] overflow-auto">
-      <table className="min-w-[760px] w-full text-left text-sm">
-        <thead className="sticky top-0 bg-primary text-xs text-primary-foreground"><tr><th className="px-4 py-3">Learner</th>{periods.map((period) => <th key={period.short_label} className="px-4 py-3">{period.display_name}</th>)}<th className="px-4 py-3">Year status</th></tr></thead>
-        <tbody className="divide-y">{pageRows.map((row) => { const grades = row.periodGrades.map((item) => item.grade).filter((grade): grade is number => grade !== null); const average = grades.length ? grades.reduce((sum, grade) => sum + grade, 0) / grades.length : null; return <tr key={row.student_number}><td className="px-4 py-4"><p className="font-medium">{row.last_name}, {row.first_name}</p><p className="text-xs text-muted-foreground">{row.student_number}</p></td>{row.periodGrades.map((item) => <td key={item.label} className="px-4 py-4 tabular-nums">{item.grade === null ? "—" : item.grade.toFixed(2)}</td>)}<td className="px-4 py-4 font-medium">{average === null ? "Incomplete" : average.toFixed(2)}</td></tr>})}</tbody>
+      <table className="min-w-[1100px] w-full text-left text-sm">
+        <thead className="sticky top-0 bg-primary text-xs text-primary-foreground">
+          <tr><th rowSpan={2} className="px-4 py-3">Learner</th>{periods.map((period) => <th key={period.short_label} colSpan={3} className="px-4 py-3 text-center">{period.display_name}</th>)}<th rowSpan={2} className="px-4 py-3">Year Average</th></tr>
+          <tr>{periods.map((period) => <Fragment key={period.short_label}><th className="px-4 py-2">Final Grade</th><th className="px-4 py-2">Descriptor</th><th className="px-4 py-2">Remarks</th></Fragment>)}</tr>
+        </thead>
+        <tbody className="divide-y">{pageRows.map((row) => { const grades = periods.map((period) => row.periodGrades.find((item) => item.label === period.short_label)?.grade ?? null).filter((grade): grade is number => grade !== null); const average = grades.length ? grades.reduce((sum, grade) => sum + grade, 0) / grades.length : null; return <tr key={row.student_number}><td className="px-4 py-4"><p className="font-medium">{row.last_name}, {row.first_name}</p><p className="text-xs text-muted-foreground">{row.student_number}</p></td>{periods.map((period) => { const result = row.periodGrades.find((item) => item.label === period.short_label); return <Fragment key={period.short_label}><td className="px-4 py-4 tabular-nums">{result?.grade == null ? "—" : result.grade.toFixed(2)}</td><td className="px-4 py-4">{result?.descriptor ?? "—"}</td><td className="px-4 py-4">{result?.remarks ?? "Incomplete"}</td></Fragment>})}<td className="px-4 py-4 font-medium">{average === null ? "Incomplete" : average.toFixed(2)}</td></tr>})}</tbody>
       </table>
     </div>
     <Pagination page={page} totalItems={rows.length} onPageChange={setPage} />
+  </section>
+}
+
+function ProgressSummaryTable({
+  rows,
+  periods,
+  ratings,
+  search,
+  genderFilter,
+  onGenderChange,
+}: {
+  rows: Array<{
+    id: string
+    studentNumber: string
+    learnerName: string
+    first_name: string
+    last_name: string
+    gender: string | null
+    terms: Array<{
+      label: string
+      ratedCount: number
+      totalCompetencies: number
+      ratingCounts: Record<string, number>
+      narrativeEntered: boolean
+    }>
+  }>
+  periods: Array<{ short_label: string; display_name: string }>
+  ratings: Array<{ value: string; label: string }>
+  search: string
+  genderFilter: PupilGenderFilterValue
+  onGenderChange: (value: PupilGenderFilterValue) => void
+}) {
+  const [page, setPage] = useState(1)
+  const visibleRows = sortPupilsAlphabetically(rows.filter((row) =>
+    matchesPupilGender(row.gender, genderFilter) &&
+    `${row.learnerName} ${row.studentNumber}`.toLowerCase().includes(search.toLowerCase()),
+  ))
+  const pageRows = visibleRows.slice((page - 1) * DEFAULT_PAGE_SIZE, page * DEFAULT_PAGE_SIZE)
+  return <section className="overflow-hidden rounded-xl border bg-card">
+    <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <h3 className="font-semibold">Final progress summary</h3>
+        <p className="text-sm text-muted-foreground">Term-by-term competency ratings and narrative completion. Kinder and Grade 1 use descriptive ratings, not numeric final grades.</p>
+        <p className="mt-1 text-xs text-muted-foreground">{ratings.map((rating) => `${rating.value}: ${rating.label}`).join(" · ")}</p>
+      </div>
+      <PupilGenderFilter value={genderFilter} onChange={onGenderChange} />
+    </div>
+    <div className="max-h-[70vh] overflow-auto">
+      <table className="min-w-[900px] w-full text-left text-sm">
+        <thead className="sticky top-0 bg-primary text-xs text-primary-foreground">
+          <tr>
+            <th className="sticky left-0 bg-primary px-4 py-3 text-primary-foreground">Learner</th>
+            {periods.map((period) => <th key={period.short_label} className="px-4 py-3">{period.display_name} progress</th>)}
+          </tr>
+        </thead>
+        <tbody className="divide-y">
+          {pageRows.map((row) => <tr key={row.id}>
+            <td className="sticky left-0 bg-card px-4 py-3">
+              <p className="font-medium">{row.learnerName}</p>
+              <p className="text-xs text-muted-foreground">{row.studentNumber}</p>
+            </td>
+            {periods.map((period) => {
+              const term = row.terms.find((item) => item.label === period.display_name)
+              return <td key={period.short_label} className="px-4 py-3">
+                <p className="tabular-nums">{term?.ratedCount ?? 0} / {term?.totalCompetencies ?? 0} competencies rated</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {ratings.map((rating) => `${rating.value} ${term?.ratingCounts[rating.value] ?? 0}`).join(" · ")}
+                </p>
+                <p className={`mt-1 text-xs ${term?.narrativeEntered ? "text-primary" : "text-muted-foreground"}`}>
+                  {term?.narrativeEntered ? "Narrative entered" : "No narrative"}
+                </p>
+              </td>
+            })}
+          </tr>)}
+        </tbody>
+      </table>
+    </div>
+    {!pageRows.length && <p className="p-8 text-center text-sm text-muted-foreground">No pupils match the selected filters.</p>}
+    <Pagination page={page} totalItems={visibleRows.length} onPageChange={setPage} />
   </section>
 }
 

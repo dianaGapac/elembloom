@@ -20,6 +20,30 @@ export type ExportRow = {
 
 export type ExportAssessment = { id: string; title: string; category: string; totalPoints: number; assessmentDate: string }
 export type ExportContext = { classLabel: string; subject: string; schoolYear: string; weights: Record<string, number> }
+export type FinalGradeExportRow = {
+  studentNumber: string
+  learnerName: string
+  periodGrades: Array<{ label: string; grade: number | null; descriptor: string | null; remarks: string }>
+}
+export type ProgressExportRow = {
+  studentNumber: string
+  learnerName: string
+  competencies: Record<string, string>
+  whatChildCanDo: string
+  learningToImprove: string
+  teacherComments: string
+}
+export type FinalProgressExportRow = {
+  studentNumber: string
+  learnerName: string
+  terms: Array<{
+    label: string
+    competencies: Record<string, string>
+    whatChildCanDo: string
+    learningToImprove: string
+    teacherComments: string
+  }>
+}
 
 const categories = academicCategories
 
@@ -69,6 +93,275 @@ export function downloadCsv(filename: string, content: string) {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement("a")
   anchor.href = url; anchor.download = filename; anchor.click(); URL.revokeObjectURL(url)
+}
+
+export function buildFinalGradesCsv(
+  rows: FinalGradeExportRow[],
+  periods: Array<{ short_label: string; display_name: string }>,
+) {
+  const headers = [
+    "Student Number",
+    "Learner Name",
+    ...periods.flatMap((period) => [
+      `${period.display_name} Final Grade`,
+      `${period.display_name} Descriptor`,
+      `${period.display_name} Remarks`,
+    ]),
+    "Year Average",
+  ]
+  const lines = [headers.map(csvCell).join(",")]
+  for (const row of rows) {
+    const termResults = periods.map((period) =>
+      row.periodGrades.find((item) => item.label === period.short_label),
+    )
+    const grades = termResults.map((item) => item?.grade ?? null)
+    const recordedGrades = grades.filter((grade): grade is number => grade !== null)
+    const yearAverage = recordedGrades.length
+      ? recordedGrades.reduce((sum, grade) => sum + grade, 0) / recordedGrades.length
+      : null
+    lines.push(
+      [
+        row.studentNumber,
+        row.learnerName,
+        ...termResults.flatMap((item) => [
+          item?.grade ?? "",
+          item?.descriptor ?? "",
+          item?.remarks ?? "",
+        ]),
+        yearAverage === null ? "" : yearAverage.toFixed(2),
+      ]
+        .map(csvCell)
+        .join(","),
+    )
+  }
+  return `\uFEFF${lines.join("\n")}`
+}
+
+export function downloadFinalGradesWorkbook(
+  filename: string,
+  rows: FinalGradeExportRow[],
+  periods: Array<{ short_label: string; display_name: string }>,
+  context: { classLabel: string; subject: string; schoolYear: string },
+) {
+  const headers = [
+    "Student Number",
+    "Learner Name",
+    ...periods.flatMap((period) => [
+      `${period.display_name} Final Grade`,
+      `${period.display_name} Descriptor`,
+      `${period.display_name} Remarks`,
+    ]),
+    "Year Average",
+  ]
+  const values: unknown[][] = [
+    [`${context.classLabel} · ${context.subject} · ${context.schoolYear} · Final Grades`],
+    headers,
+    ...rows.map((row) => {
+      const termResults = periods.map((period) =>
+        row.periodGrades.find((item) => item.label === period.short_label),
+      )
+      const grades = termResults.map((item) => item?.grade ?? null)
+      const recordedGrades = grades.filter((grade): grade is number => grade !== null)
+      const yearAverage = recordedGrades.length
+        ? recordedGrades.reduce((sum, grade) => sum + grade, 0) / recordedGrades.length
+        : null
+      return [
+        row.studentNumber,
+        row.learnerName,
+        ...termResults.flatMap((item) => [
+          item?.grade ?? "",
+          item?.descriptor ?? "",
+          item?.remarks ?? "",
+        ]),
+        yearAverage ?? "",
+      ]
+    }),
+  ]
+  const worksheet = XLSX.utils.aoa_to_sheet(values)
+  worksheet["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } }]
+  worksheet["!cols"] = [
+    { wch: 18 },
+    { wch: 28 },
+    ...periods.flatMap(() => [{ wch: 22 }, { wch: 28 }, { wch: 22 }]),
+    { wch: 16 },
+  ]
+  worksheet["!autofilter"] = {
+    ref: XLSX.utils.encode_range({
+      s: { r: 1, c: 0 },
+      e: { r: rows.length + 1, c: headers.length - 1 },
+    }),
+  }
+  const workbook = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Final Grades")
+  XLSX.writeFile(workbook, filename)
+}
+
+export function buildProgressRecordCsv(rows: ProgressExportRow[], competencyNames: string[]) {
+  const headers = [
+    "Student Number",
+    "Learner Name",
+    ...competencyNames,
+    "What the Child Can Do",
+    "Learning to Improve",
+    "Teacher Comments",
+  ]
+  const lines = [
+    headers.map(csvCell).join(","),
+    ...rows.map((row) =>
+      [
+        row.studentNumber,
+        row.learnerName,
+        ...competencyNames.map((name) => row.competencies[name] ?? ""),
+        row.whatChildCanDo,
+        row.learningToImprove,
+        row.teacherComments,
+      ]
+        .map(csvCell)
+        .join(","),
+    ),
+  ]
+  return `\uFEFF${lines.join("\n")}`
+}
+
+export function downloadProgressRecordWorkbook(
+  filename: string,
+  rows: ProgressExportRow[],
+  competencyNames: string[],
+  context: { classLabel: string; subject: string; term: string; schoolYear: string },
+) {
+  const headers = [
+    "Student Number",
+    "Learner Name",
+    ...competencyNames,
+    "What the Child Can Do",
+    "Learning to Improve",
+    "Teacher Comments",
+  ]
+  const values: unknown[][] = [
+    [`${context.classLabel} · ${context.subject} · ${context.term} · ${context.schoolYear}`],
+    headers,
+    ...rows.map((row) => [
+      row.studentNumber,
+      row.learnerName,
+      ...competencyNames.map((name) => row.competencies[name] ?? ""),
+      row.whatChildCanDo,
+      row.learningToImprove,
+      row.teacherComments,
+    ]),
+  ]
+  const worksheet = XLSX.utils.aoa_to_sheet(values)
+  worksheet["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } }]
+  worksheet["!cols"] = [
+    { wch: 18 },
+    { wch: 28 },
+    ...competencyNames.map(() => ({ wch: 32 })),
+    { wch: 40 },
+    { wch: 40 },
+    { wch: 40 },
+  ]
+  worksheet["!autofilter"] = {
+    ref: XLSX.utils.encode_range({
+      s: { r: 1, c: 0 },
+      e: { r: rows.length + 1, c: headers.length - 1 },
+    }),
+  }
+  const workbook = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Progress Records")
+  XLSX.writeFile(workbook, filename)
+}
+
+function finalProgressExportData(rows: FinalProgressExportRow[]) {
+  const competencyNames = [...new Set(rows.flatMap((row) =>
+    row.terms.flatMap((term) => Object.keys(term.competencies)),
+  ))]
+  return {
+    competencyNames,
+    records: rows.flatMap((row) => row.terms.map((term) => ({
+      studentNumber: row.studentNumber,
+      learnerName: row.learnerName,
+      term: term.label,
+      competencies: term.competencies,
+      whatChildCanDo: term.whatChildCanDo,
+      learningToImprove: term.learningToImprove,
+      teacherComments: term.teacherComments,
+    }))),
+  }
+}
+
+export function buildFinalProgressCsv(rows: FinalProgressExportRow[]) {
+  const { competencyNames, records } = finalProgressExportData(rows)
+  const headers = [
+    "Student Number",
+    "Learner Name",
+    "Term",
+    ...competencyNames,
+    "What the Child Can Do",
+    "Learning to Improve",
+    "Teacher Comments",
+  ]
+  const lines = [
+    headers.map(csvCell).join(","),
+    ...records.map((record) => [
+      record.studentNumber,
+      record.learnerName,
+      record.term,
+      ...competencyNames.map((name) => record.competencies[name] ?? ""),
+      record.whatChildCanDo,
+      record.learningToImprove,
+      record.teacherComments,
+    ].map(csvCell).join(",")),
+  ]
+  return `\uFEFF${lines.join("\n")}`
+}
+
+export function downloadFinalProgressWorkbook(
+  filename: string,
+  rows: FinalProgressExportRow[],
+  context: { classLabel: string; subject: string; schoolYear: string },
+) {
+  const { competencyNames, records } = finalProgressExportData(rows)
+  const headers = [
+    "Student Number",
+    "Learner Name",
+    "Term",
+    ...competencyNames,
+    "What the Child Can Do",
+    "Learning to Improve",
+    "Teacher Comments",
+  ]
+  const values: unknown[][] = [
+    [`${context.classLabel} · ${context.subject} · ${context.schoolYear} · Final Progress Summary`],
+    headers,
+    ...records.map((record) => [
+      record.studentNumber,
+      record.learnerName,
+      record.term,
+      ...competencyNames.map((name) => record.competencies[name] ?? ""),
+      record.whatChildCanDo,
+      record.learningToImprove,
+      record.teacherComments,
+    ]),
+  ]
+  const worksheet = XLSX.utils.aoa_to_sheet(values)
+  worksheet["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } }]
+  worksheet["!cols"] = [
+    { wch: 18 },
+    { wch: 28 },
+    { wch: 18 },
+    ...competencyNames.map(() => ({ wch: 32 })),
+    { wch: 40 },
+    { wch: 40 },
+    { wch: 40 },
+  ]
+  worksheet["!autofilter"] = {
+    ref: XLSX.utils.encode_range({
+      s: { r: 1, c: 0 },
+      e: { r: records.length + 1, c: headers.length - 1 },
+    }),
+  }
+  const workbook = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Final Progress")
+  XLSX.writeFile(workbook, filename)
 }
 
 export function downloadClassRecordWorkbook(filename: string, rows: ExportRow[], assessments: ExportAssessment[], periodLabel: string, context?: ExportContext) {
