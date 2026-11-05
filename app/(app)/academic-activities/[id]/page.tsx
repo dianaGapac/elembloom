@@ -43,7 +43,7 @@ export default function ActivityDetailPage() {
   const [activityDate, setActivityDate] = useState("")
   const [selectedClassIds, setSelectedClassIds] = useState<string[]>([])
   const [subjectByClass, setSubjectByClass] = useState<Record<string, string>>({})
-  if (isLoading) return <main className="mx-auto max-w-5xl p-6"><p className="text-sm text-muted-foreground">Loading activity…</p></main>
+  if (isLoading) return <main className="mx-auto max-w-5xl p-6"><p suppressHydrationWarning className="text-sm text-muted-foreground">Loading activity…</p></main>
   if (error || !data?.activity) return <main className="mx-auto max-w-5xl p-6"><p className="text-sm text-destructive">Unable to load this activity.</p></main>
   const { activity, assignments, assessments, classes, subjects, periods } = data
   const passingScore = Number(activity.total_points) * Number(activity.passing_percentage) / 100
@@ -75,7 +75,7 @@ export default function ActivityDetailPage() {
     const { data: auth, error: authError } = await supabase.auth.getUser()
     if (authError || !auth.user) { setMessage(authError?.message ?? "Please sign in again."); return }
     if (!assignments.length && !selectedClassIds.length) { setMessage("Assign this activity to at least one class."); return }
-    if ([...assignments.map((item) => item.class_id), ...selectedClassIds].some((classId) => {
+    if (selectedClassIds.some((classId) => {
       const classRecord = classes.find((item) => item.id === classId)
       return classRecord && classRecord.grade_level <= 1
     })) {
@@ -235,7 +235,8 @@ export default function ActivityDetailPage() {
       </fieldset>
       <fieldset className="rounded-xl border p-4">
         <legend className="px-2 text-sm font-semibold">Assign to additional classes</legend>
-        <div className="grid gap-3 sm:grid-cols-2">{classes.filter((klass) => !assignedClassIds.has(klass.id)).map((klass) => <label key={klass.id} className="rounded-lg border p-3">
+        <p className="mb-3 text-xs text-muted-foreground">Kinder and Grade 1 use competency records and cannot be assigned numeric activities.</p>
+        <div className="grid gap-3 sm:grid-cols-2">{classes.filter((klass) => klass.grade_level >= 2 && !assignedClassIds.has(klass.id)).map((klass) => <label key={klass.id} className="rounded-lg border p-3">
           <span className="flex items-center gap-2 text-sm"><input type="checkbox" checked={selectedClassIds.includes(klass.id)} onChange={() => setSelectedClassIds((current) => current.includes(klass.id) ? current.filter((id) => id !== klass.id) : [...current, klass.id])} />{gradeLevelLabel(klass.grade_level)} – {klass.section_name}</span>
           {selectedClassIds.includes(klass.id) && <select aria-label={`Subject for new ${klass.section_name} assignment`} value={subjectByClass[klass.id] ?? ""} onChange={(event) => setSubjectByClass((current) => ({ ...current, [klass.id]: event.target.value }))} className="mt-3 h-9 w-full rounded-md border bg-background px-2 text-sm"><option value="">General / no subject</option>{subjects.filter((subject) => subject.class_id === klass.id).map((subject) => <option key={subject.id} value={subject.id}>{subject.subject_name}</option>)}</select>}
         </label>)}</div>
@@ -254,7 +255,7 @@ export default function ActivityDetailPage() {
         const subject = subjects.find((item) => item.id === assignment.subject_offering_id)
         const assessment = assessments.find((item) => item.id === assignment.assessment_id)
         const summary = passSummary(assignment.class_id, assessment?.id ?? null)
-        return <div key={assignment.id} className="flex flex-col justify-between gap-3 py-4 sm:flex-row sm:items-center"><div><p className="font-medium">Grade {classRecord?.grade_level} – {classRecord?.section_name}</p><p className="text-sm text-muted-foreground">{subject?.subject_name || "General activity"} · {assignment.grading_period}</p><p className="mt-1 text-xs text-muted-foreground">Passed {summary.passedCount}/{summary.pupilCount} pupils · Passing rate {summary.rate === null ? "—" : `${summary.rate}%`}</p></div><Link href={`/academic-activities/${activity.id}/scores?assignmentId=${assignment.id}`} className="text-sm font-medium text-primary hover:underline">Open score entry</Link></div>
+        return <div key={assignment.id} className="flex flex-col justify-between gap-3 py-4 sm:flex-row sm:items-center"><div><p className="font-medium">{gradeLevelLabel(classRecord?.grade_level)} – {classRecord?.section_name}</p><p className="text-sm text-muted-foreground">{subject?.subject_name || "General activity"} · {assignment.grading_period}</p><p className="mt-1 text-xs text-muted-foreground">Passed {summary.passedCount}/{summary.pupilCount} pupils · Passing rate {summary.rate === null ? "—" : `${summary.rate}%`}</p></div><Link href={`/academic-activities/${activity.id}/scores?assignmentId=${assignment.id}`} className="text-sm font-medium text-primary hover:underline">Open score entry</Link></div>
       })}</div>
     </section>
   </main>

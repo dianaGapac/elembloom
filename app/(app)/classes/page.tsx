@@ -117,7 +117,7 @@ export default function ClassesPage() {
     else { setMessage("Class deleted."); await mutate() }
   }
 
-  if (isLoading) return <main className="mx-auto max-w-7xl p-6"><p className="text-sm text-muted-foreground">Loading classesâ€¦</p></main>
+  if (isLoading) return <main className="mx-auto max-w-7xl p-6"><p className="text-sm text-muted-foreground">Loading classes...</p></main>
   if (error) return <main className="mx-auto max-w-7xl p-6"><p className="text-sm text-destructive">Unable to load classes.</p></main>
 
   return <main className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">

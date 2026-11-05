@@ -4,12 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import useSWR from "swr";
 import {
-	AlertTriangle,
-	CheckCircle2,
 	Eye,
 	Info,
 	Search,
-	ShieldAlert,
 	X,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -17,10 +14,12 @@ import { Button } from "@/components/ui/button";
 import { DEFAULT_PAGE_SIZE, Pagination } from "@/components/ui/pagination";
 import {
 	classifyRisk,
+	classifyEarlyLearningRisk,
 	type RiskAssessment,
 	type RiskAttendance,
 	type RiskClass,
 	type RiskClassRecord,
+	type RiskCompetencyRecord,
 	type RiskScore,
 	type RiskStudent,
 	type RiskThresholds,
@@ -31,7 +30,7 @@ import {
 	sortPupilsAlphabetically,
 	type PupilGenderFilterValue,
 } from "@/components/pupils/gender-filter";
-import { periodKeyForSchoolYear, periodOptionsForSchoolYear } from "@/lib/academic-structure";
+import { gradeLevelLabel, periodKeyForSchoolYear, periodOptionsForSchoolYear } from "@/lib/academic-structure";
 import { DistributionChart, TrendChart } from "@/components/ui/trend-chart";
 
 type Student = RiskStudent & {
@@ -52,6 +51,7 @@ type Data = {
 	classes: RiskClassRecord[];
 	students: Student[];
 	attendance: RiskAttendance[];
+	competencyRecords: RiskCompetencyRecord[];
 	assessments: (RiskAssessment & {
 		title: string;
 		school_year: string | null;
@@ -79,7 +79,10 @@ async function fetchRiskData(): Promise<Data> {
 			.eq("is_active", true),
 		supabase
 			.from("attendance")
-			.select("student_id, class_id, attendance_date, status"),
+			.select("student_id, class_id, attendance_date, status")
+			.order("attendance_date", { ascending: false })
+			.order("student_id")
+			.range(0, 999),
 		supabase
 			.from("assessments")
 			.select(
@@ -92,9 +95,24 @@ async function fetchRiskData(): Promise<Data> {
 		supabase
 			.from("grading_settings")
 			.select("risk_thresholds,grade_level,subject_name,school_year"),
+		supabase
+			.from("competency_records")
+			.select("class_id,student_id,grading_period,rating"),
 	]);
 	for (const query of queries)
 		if (query.error) throw new Error(query.error.message);
+	const attendance: RiskAttendance[] = queries[2].data ?? [];
+	for (let from = 1000; queries[2].data?.length === 1000; from += 1000) {
+		const { data: nextPage, error: attendanceError } = await supabase
+			.from("attendance")
+			.select("student_id, class_id, attendance_date, status")
+			.order("attendance_date", { ascending: false })
+			.order("student_id")
+			.range(from, from + 999);
+		if (attendanceError) throw new Error(attendanceError.message);
+		attendance.push(...(nextPage ?? []));
+		if (nextPage?.length !== 1000) break;
+	}
 	const settingsRows = (queries[5].data ?? []) as RiskSettingRow[];
 	const configured =
 		settingsRows.find(
@@ -117,9 +135,10 @@ async function fetchRiskData(): Promise<Data> {
 	return {
 		classes: queries[0].data ?? [],
 		students: queries[1].data ?? [],
-		attendance: queries[2].data ?? [],
+		attendance,
 		assessments: queries[3].data ?? [],
 		scores: queries[4].data ?? [],
+		competencyRecords: queries[6].data ?? [],
 		settings,
 		settingRows: settingsRows,
 	};
@@ -170,11 +189,43 @@ function riskSettingsForStudent(
 	return { ...defaults, ...(matching?.risk_thresholds ?? {}) };
 }
 
+function classifyStudentRisk(student: Student, data: Data, schoolYear: string, period: string): RiskClass {
+	const studentClass = data.classes.find((item) => item.id === student.class_id);
+	const gradeLevel = studentClass?.grade_level;
+	const selectedYear = schoolYear || studentClass?.school_year || "";
+	const riskData = {
+		...data,
+		settings: riskSettingsForStudent(student, data, selectedYear),
+	};
+	return gradeLevel === 0 || gradeLevel === 1
+		? classifyEarlyLearningRisk(student, riskData, selectedYear, period)
+		: classifyRisk(student, riskData, selectedYear, period);
+}
+
+function performanceSummary(risk: RiskClass, gradeLevel?: number) {
+	if (gradeLevel === 0 || gradeLevel === 1) {
+		const progress = risk.competencyProgress;
+		if (!progress?.rated) return "No competency ratings recorded";
+		return `${progress.rated} competency ratings · ${progress.concerning} ${progress.concernLabel} · ${progress.developing} ${progress.developingLabel}`;
+	}
+	return risk.average === null ? "Not enough data" : `${risk.average.toFixed(1)}% average`;
+}
+
+function performanceCellSummary(risk: RiskClass, gradeLevel?: number) {
+	if (gradeLevel === 0 || gradeLevel === 1) {
+		const progress = risk.competencyProgress;
+		if (!progress?.rated) return "No ratings";
+		const concernCode = gradeLevel === 0 ? "BG" : "E";
+		const developingCode = gradeLevel === 0 ? "DV" : "C/D";
+		return `${progress.rated} rated · ${concernCode} ${progress.concerning} · ${developingCode} ${progress.developing}`;
+	}
+	return risk.average === null ? "No score" : `${risk.average.toFixed(1)}%`;
+}
+
 export default function RiskAssessmentPage() {
 	const { data, error, isLoading } = useSWR("risk-assessment", fetchRiskData);
 	const [search, setSearch] = useState("");
 	const [schoolYear, setSchoolYear] = useState("");
-	const [grade, setGrade] = useState("");
 	const [classId, setClassId] = useState("");
 	const [period, setPeriod] = useState("");
 	const [level, setLevel] = useState("");
@@ -206,7 +257,7 @@ export default function RiskAssessmentPage() {
 				studentId: selected.id,
 				to: selected.parent_guardian_email,
 				subject: `ElemBloom support update for ${selected.first_name} ${selected.last_name}`,
-				message: `Dear Parent/Guardian,\n\nWe are sharing a supportive progress update for ${selected.first_name} ${selected.last_name}.\n\nCurrent risk indicator: ${selectedRisk.level.toUpperCase()}\n${selectedRisk.factors.length ? `Areas to review: ${selectedRisk.factors.join(" ")}` : "No immediate areas requiring targeted support were identified from the available records."}\n\nThis indicator is a screening aid, not a prediction. We recommend working with the teacher on the next steps and ways to support learning at home.\n\nElemBloom`,
+				message: `Dear Parent/Guardian,\n\nWe are sharing a supportive progress update for ${selected.first_name} ${selected.last_name}.\n\nCurrent risk indicator: ${selectedRisk.level.toUpperCase()}\nProgress: ${performanceSummary(selectedRisk, classes.find((item) => item.id === selected.class_id)?.grade_level)}\n${selectedRisk.factors.length ? `Areas to review: ${selectedRisk.factors.join(" ")}` : "No immediate areas requiring targeted support were identified from the available records."}\n\nThis indicator is a screening aid, not a prediction. We recommend working with the teacher on the next steps and ways to support learning at home.\n\nElemBloom`,
 				type: "risk_update",
 			}),
 		});
@@ -239,7 +290,7 @@ export default function RiskAssessmentPage() {
 						studentId: student.id,
 						to: student.parent_guardian_email,
 						subject: `ElemBloom progress update for ${student.first_name} ${student.last_name}`,
-						message: `Dear Parent/Guardian,\n\nThis is a progress update for ${student.first_name} ${student.last_name} (${student.student_number}).\n\nCurrent risk level: ${risk.level.toUpperCase()}\nAssessment average: ${risk.average == null ? "Unavailable" : `${risk.average.toFixed(1)}%`}\n\n${risk.factors.length ? `Factors to review: ${risk.factors.join(" ")}` : "No immediate risk factors were identified from the available records."}\n\nPlease contact the teacher so we can agree on supportive next steps.\n\nElemBloom`,
+						message: `Dear Parent/Guardian,\n\nThis is a progress update for ${student.first_name} ${student.last_name} (${student.student_number}).\n\nCurrent risk level: ${risk.level.toUpperCase()}\nProgress: ${performanceSummary(risk, classes.find((item) => item.id === student.class_id)?.grade_level)}\n\n${risk.factors.length ? `Factors to review: ${risk.factors.join(" ")}` : "No immediate risk factors were identified from the available records."}\n\nPlease contact the teacher so we can agree on supportive next steps.\n\nElemBloom`,
 						type: "risk_update",
 					}),
 				}),
@@ -286,7 +337,7 @@ export default function RiskAssessmentPage() {
 	];
 	useEffect(() => {
 		setSelectedIds([]);
-	}, [search, schoolYear, grade, classId, period, level, genderFilter]);
+	}, [search, schoolYear, classId, period, level, genderFilter]);
 	const rows = useMemo(
 		() =>
 			sortPupilsAlphabetically(
@@ -296,15 +347,7 @@ export default function RiskAssessmentPage() {
 			)
 				.map((student) => ({
 					student,
-					risk: classifyRisk(
-						student,
-						{
-							...data!,
-							settings: riskSettingsForStudent(student, data!, schoolYear),
-						},
-						schoolYear,
-						period,
-					),
+					risk: classifyStudentRisk(student, data!, schoolYear, period),
 				}))
 				.filter(({ student, risk }) => {
 					const cls = classes.find((item) => item.id === student.class_id);
@@ -313,7 +356,6 @@ export default function RiskAssessmentPage() {
 					return (
 						text.includes(search.toLowerCase()) &&
 						(!schoolYear || cls?.school_year === schoolYear) &&
-						(!grade || String(cls?.grade_level) === grade) &&
 						(!classId || student.class_id === classId) &&
 						(!level || risk.level === level)
 					);
@@ -324,7 +366,6 @@ export default function RiskAssessmentPage() {
 			classes,
 			search,
 			schoolYear,
-			grade,
 			classId,
 			period,
 			level,
@@ -339,15 +380,7 @@ export default function RiskAssessmentPage() {
 		() =>
 			students
 				.map((student) =>
-					classifyRisk(
-						student,
-						{
-							...data!,
-							settings: riskSettingsForStudent(student, data!, schoolYear),
-						},
-						schoolYear,
-						period,
-					),
+					classifyStudentRisk(student, data!, schoolYear, period),
 				)
 				.reduce(
 					(counts, risk) => ({
@@ -364,7 +397,8 @@ export default function RiskAssessmentPage() {
 		const visibleClassIds = new Set(rows.map(({ student }) => student.class_id));
 		const matchingAssessments = data.assessments.filter((assessment) => {
 			const classRecord = classes.find((item) => item.id === assessment.class_id);
-			return visibleClassIds.has(assessment.class_id)
+			return (classRecord?.grade_level ?? 2) > 1
+				&& visibleClassIds.has(assessment.class_id)
 				&& (!schoolYear || classRecord?.school_year === schoolYear)
 				&& (!period || periodKeyForSchoolYear(assessment.grading_period, classRecord?.school_year) === period);
 		});
@@ -392,17 +426,40 @@ export default function RiskAssessmentPage() {
 				value: values.reduce((sum, value) => sum + value, 0) / values.length,
 			}));
 	}, [data, rows, classes, schoolYear, period]);
+	const competencyTrend = useMemo(() => {
+		if (!data || !rows.length) return [];
+		const visibleStudentIds = new Set(rows.map(({ student }) => student.id));
+		const earlyClasses = classes.filter((item) =>
+			(item.grade_level === 0 || item.grade_level === 1) &&
+			(!classId || item.id === classId) &&
+			(!schoolYear || item.school_year === schoolYear),
+		);
+		const earlyClassIds = new Set(earlyClasses.map((item) => item.id));
+		return [...new Set(earlyClasses.map((item) => item.school_year))]
+			.flatMap((year) => periodOptionsForSchoolYear(year))
+			.filter((item, index, options) =>
+				options.findIndex((candidate) => candidate.short_label === item.short_label) === index &&
+				(!period || item.short_label === period),
+			)
+			.map((item) => {
+				const records = data.competencyRecords.filter((record) =>
+					earlyClassIds.has(record.class_id) &&
+					visibleStudentIds.has(record.student_id) &&
+					periodKeyForSchoolYear(record.grading_period, classes.find((cls) => cls.id === record.class_id)?.school_year) === item.short_label,
+				);
+				const concerningCount = records.filter((record) =>
+					record.rating === "BG" || record.rating === "E",
+				).length;
+				return records.length ? { label: item.display_name, value: concerningCount } : null;
+			})
+			.filter((point): point is { label: string; value: number } => point !== null);
+	}, [data, rows, classes, classId, schoolYear, period]);
+	const selectedClass = classId ? classes.find((item) => item.id === classId) : null;
+	const showCompetencyTrend = selectedClass?.grade_level === 0 || selectedClass?.grade_level === 1;
+	const performanceTrend = showCompetencyTrend ? competencyTrend : assessmentTrend;
 	const selectedRisk =
 		selected && data
-			? classifyRisk(
-					selected,
-					{
-						...data,
-						settings: riskSettingsForStudent(selected, data, schoolYear),
-					},
-					schoolYear,
-					period,
-				)
+			? classifyStudentRisk(selected, data, schoolYear, period)
 			: null;
 	const selectedThresholds =
 		selected && data
@@ -414,15 +471,7 @@ export default function RiskAssessmentPage() {
 		if (!studentClass) return [];
 		return periodOptionsForSchoolYear(studentClass.school_year)
 			.map((item) => {
-				const risk = classifyRisk(
-					selected,
-					{
-						...data,
-						settings: riskSettingsForStudent(selected, data, studentClass.school_year),
-					},
-					studentClass.school_year,
-					item.short_label,
-				);
+				const risk = classifyStudentRisk(selected, data, studentClass.school_year, item.short_label);
 				return risk.level === "incomplete"
 					? null
 					: { label: item.display_name, value: risk.totalPoints };
@@ -455,49 +504,17 @@ export default function RiskAssessmentPage() {
 				</h1>
 				<p className='mt-2 max-w-2xl text-muted-foreground'>
 					Identify pupils who may benefit from timely, focused support using
-					available academic records.
+					attendance and grade-appropriate learning records.
 				</p>
 			</div>
-			<div className='grid gap-4 sm:grid-cols-2 lg:grid-cols-4'>
-				{(
-					[
-						[
-							"high",
-							"High-risk pupils",
-							AlertTriangle,
-							"border-destructive/30 bg-destructive/5 text-destructive",
-						],
-						[
-							"moderate",
-							"Moderate-risk pupils",
-							ShieldAlert,
-							"border-amber-500/30 bg-amber-500/5 text-amber-700",
-						],
-						[
-							"low",
-							"Low-risk pupils",
-							CheckCircle2,
-							"border-emerald-500/30 bg-emerald-500/5 text-emerald-700",
-						],
-						[
-							"incomplete",
-							"Incomplete data",
-							Info,
-							"border-sky-500/30 bg-sky-500/5 text-sky-700",
-						],
-					] as const
-				).map(([key, label, Icon, tone]) => (
-					<div key={key} className={`rounded-xl border p-5 ${tone}`}>
-						<div className='flex items-center justify-between'>
-							<p className='text-sm font-semibold'>{label}</p>
-							<Icon className='size-5' />
-						</div>
-						<p className='mt-3 text-3xl font-bold'>{summary[key]}</p>
-					</div>
-				))}
-			</div>
 			<div className='grid gap-4 lg:grid-cols-[2fr_1fr]'>
-				<TrendChart title='Assessment performance trend' points={assessmentTrend} />
+				<TrendChart
+					title={showCompetencyTrend ? "Competency ratings needing support" : "Assessment performance trend"}
+					points={performanceTrend}
+					valueSuffix={showCompetencyTrend ? " ratings" : "%"}
+					caption={showCompetencyTrend ? "Count of Beginning (Kinder) or Emerging (Grade 1) competency descriptors by term; ratings are not converted to numeric grades." : undefined}
+					emptyMessage={showCompetencyTrend ? "No Beginning or Emerging competency ratings are recorded for the selected class and period." : undefined}
+				/>
 				<DistributionChart
 					title='Risk-level distribution (all pupils)'
 					items={[
@@ -538,23 +555,7 @@ export default function RiskAssessmentPage() {
 						))}
 					</select>
 					<select
-						aria-label='Grade'
-						value={grade}
-						onChange={(event) => {
-							setGrade(event.target.value);
-							setPage(1);
-						}}
-						className='rounded-lg border bg-background px-3 py-2 text-sm'
-					>
-						<option value=''>All grades</option>
-						{[...new Set(classes.map((item) => item.grade_level))]
-							.sort()
-							.map((item) => (
-								<option key={item}>{item}</option>
-							))}
-					</select>
-					<select
-						aria-label='Section'
+						aria-label='Class'
 						value={classId}
 						onChange={(event) => {
 							setClassId(event.target.value);
@@ -562,10 +563,10 @@ export default function RiskAssessmentPage() {
 						}}
 						className='rounded-lg border bg-background px-3 py-2 text-sm'
 					>
-						<option value=''>All sections</option>
+						<option value=''>All classes</option>
 						{classes.map((item) => (
 							<option key={item.id} value={item.id}>
-								{item.section_name}
+								{gradeLevelLabel(item.grade_level)} – {item.section_name}
 							</option>
 						))}
 					</select>
@@ -676,7 +677,17 @@ export default function RiskAssessmentPage() {
 					</div>
 				) : (
 					<div className='overflow-x-auto'>
-						<table className='w-full min-w-[920px] text-left text-sm'>
+						<table className='w-full min-w-[1040px] table-fixed text-left text-sm'>
+							<colgroup>
+								<col className='w-10' />
+								<col className='w-[12%]' />
+								<col className='w-[18%]' />
+								<col className='w-[15%]' />
+								<col className='w-[16%]' />
+								<col className='w-[12%]' />
+								<col className='w-[10%]' />
+								<col className='w-[17%]' />
+							</colgroup>
 							<thead className='bg-muted/40 text-xs text-muted-foreground'>
 								<tr>
 									<th className='px-5 py-3'>
@@ -712,6 +723,7 @@ export default function RiskAssessmentPage() {
 									<th className='px-5 py-3'>Pupil name</th>
 									<th className='px-5 py-3'>Grade and section</th>
 									<th className='px-5 py-3'>Performance</th>
+									<th className='px-5 py-3'>Attendance</th>
 									<th className='px-5 py-3'>Risk</th>
 									<th className='px-5 py-3'>Action</th>
 								</tr>
@@ -742,12 +754,18 @@ export default function RiskAssessmentPage() {
 												{student.last_name}, {student.first_name}
 											</td>
 											<td className='px-5 py-4 text-muted-foreground'>
-												Grade {cls?.grade_level} · {cls?.section_name}
+												{gradeLevelLabel(cls?.grade_level)} · {cls?.section_name}
 											</td>
 											<td className='px-5 py-4'>
-												{risk.average === null
-													? "Not enough data"
-													: `${risk.average.toFixed(1)}% average`}
+												<span
+													className='block max-w-48 truncate'
+													title={performanceSummary(risk, cls?.grade_level)}
+												>
+													{performanceCellSummary(risk, cls?.grade_level)}
+												</span>
+											</td>
+											<td className='px-5 py-4'>
+												{`${risk.absences} absent · ${risk.lates} late`}
 											</td>
 											<td className='px-5 py-4'>
 												<span
@@ -935,17 +953,19 @@ export default function RiskAssessmentPage() {
 						<div className='mt-6 grid gap-4 sm:grid-cols-3'>
 							<div>
 								<p className='text-xs text-muted-foreground'>
-									Assessment average
+									{selectedRisk.competencyProgress ? "Non-numeric competency progress" : "Assessment average"}
 								</p>
 								<p className='mt-1 text-xl font-semibold'>
-									{selectedRisk.average === null
-										? "Unavailable"
-										: `${selectedRisk.average.toFixed(1)}%`}
+									{selectedRisk.competencyProgress
+										? performanceSummary(selectedRisk, classes.find((item) => item.id === selected.class_id)?.grade_level)
+										: selectedRisk.average === null
+											? "Unavailable"
+											: `${selectedRisk.average.toFixed(1)}%`}
 								</p>
 							</div>
 							<div>
 								<p className='text-xs text-muted-foreground'>
-									Failed assessments
+									{selectedRisk.competencyProgress ? "Ratings needing support" : "Failed assessments"}
 								</p>
 								<p className='mt-1 text-xl font-semibold'>
 									{selectedRisk.failed}
@@ -964,10 +984,14 @@ export default function RiskAssessmentPage() {
 							<TrendChart
 								title='Risk points by grading period'
 								points={selectedRiskTrend}
-								maxValue={11}
+								maxValue={selectedRisk.competencyProgress ? 8 : 11}
 								valueSuffix=' pts'
-								caption='Points from triggered academic and attendance rules; lower values indicate fewer current flags'
-								emptyMessage='No grading periods have enough assessment and attendance data to show a risk-point trend.'
+								caption={selectedRisk.competencyProgress
+									? "Points from attendance and non-numeric competency-descriptor indicators; ratings are not converted to grades."
+									: "Points from triggered academic and attendance rules; lower values indicate fewer current flags"}
+								emptyMessage={selectedRisk.competencyProgress
+									? "No grading periods have enough competency-rating and attendance data to show a risk-point trend."
+									: "No grading periods have enough assessment and attendance data to show a risk-point trend."}
 							/>
 						</div>
 						<div className='mt-6 rounded-xl border bg-muted/20 p-4'>
@@ -975,11 +999,9 @@ export default function RiskAssessmentPage() {
 								<div>
 									<h3 className='font-semibold'>How this risk value is computed</h3>
 									<p className='mt-1 text-sm text-muted-foreground'>
-										Assessment percentages use each latest score ÷ total points × 100; the
-										average is the mean of recorded percentages. Failed assessments are
-										below their own passing marks. Attendance rate is (non-excused
-										records − absences) ÷ non-excused records. Each triggered rule below
-										adds its points.
+										{selectedRisk.competencyProgress
+											? "Kinder and Grade 1 progress uses the recorded non-numeric competency descriptors. Beginning/Emerging and developing descriptors are considered alongside attendance; no ratings are converted to percentages or numeric grades. Attendance rate is (non-excused records − absences) ÷ non-excused records."
+											: "Assessment percentages use each latest score ÷ total points × 100; the average is the mean of recorded percentages. Failed assessments are below their own passing marks. Attendance rate is (non-excused records − absences) ÷ non-excused records."} Each triggered rule below adds its points.
 									</p>
 								</div>
 								<div className='text-right'>
@@ -1012,7 +1034,9 @@ export default function RiskAssessmentPage() {
 							{selectedThresholds && (
 								<p className='mt-3 text-xs text-muted-foreground'>
 									{selectedRisk.level === "incomplete"
-										? "The level is incomplete until both assessment scores and attendance records are available. Missing data is not counted as zero."
+										? selectedRisk.competencyProgress
+											? "The level is incomplete until competency ratings and attendance records are available. Missing data is not counted as zero."
+											: "The level is incomplete until both assessment scores and attendance records are available. Missing data is not counted as zero."
 										: `Level thresholds: High at ${selectedThresholds.high_risk_score}+ points; Moderate at ${selectedThresholds.moderate_risk_score}+ points; Low below ${selectedThresholds.moderate_risk_score} points.`}
 								</p>
 							)}

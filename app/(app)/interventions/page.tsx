@@ -5,7 +5,8 @@ import Link from "next/link"
 import { CalendarDays, CheckCircle2, ClipboardList, Mail, Plus, Save, Target, Trash2, Users, CalendarClock, BellRing, ShieldAlert } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Pagination } from "@/components/ui/pagination"
-import { classifyRisk, type RiskThresholds } from "@/lib/risk-engine"
+import { classifyEarlyLearningRisk, classifyRisk, type RiskCompetencyRecord, type RiskThresholds } from "@/lib/risk-engine"
+import { gradeLevelLabel } from "@/lib/academic-structure"
 import { PlanSuggestionDialog } from "@/components/interventions/plan-suggestion-dialog"
 import type { SuggestedInterventionPlan } from "@/lib/intervention-planner"
 import { createClient } from "@/lib/supabase/client"
@@ -34,6 +35,22 @@ function progressNotes(values: Record<string, string>) {
 const today = new Date().toISOString().slice(0, 10)
 const inputClass = "mt-1 w-full rounded-lg border bg-background px-3 py-2 text-sm"
 
+async function fetchAllPages<T>(
+  loadPage: (from: number, to: number) => PromiseLike<{
+    data: T[] | null
+    error: { message: string } | null
+  }>,
+) {
+  const rows: T[] = []
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await loadPage(from, from + 999)
+    if (error) return { data: rows, error }
+    const pageRows = data ?? []
+    rows.push(...pageRows)
+    if (pageRows.length < 1000) return { data: rows, error: null }
+  }
+}
+
 export default function InterventionsPage() {
   const supabase = useMemo(() => createClient(), [])
   const [students, setStudents] = useState<Student[]>([])
@@ -42,6 +59,7 @@ export default function InterventionsPage() {
   const [riskSettings, setRiskSettings] = useState<RiskSettingRow[]>([])
   const [scores, setScores] = useState<Score[]>([])
   const [attendance, setAttendance] = useState<Attendance[]>([])
+  const [competencyRecords, setCompetencyRecords] = useState<RiskCompetencyRecord[]>([])
   const [plans, setPlans] = useState<Plan[]>([])
   const [objectives, setObjectives] = useState<Objective[]>([])
   const [sessions, setSessions] = useState<Session[]>([])
@@ -81,12 +99,39 @@ export default function InterventionsPage() {
   function riskThresholdsFor(classRecord: ClassRecord | undefined): RiskThresholds {
     if (!classRecord) return defaultRiskThresholds
     const settings = riskSettings.filter((row) => row.school_year === classRecord.school_year)
-    const matching = settings.find((row) => row.grade_level === classRecord.grade_level && !(row.subject_name ?? "").trim())
+    const subjectName = classRecord.subject_name ?? ""
+    const matching = settings.find((row) => row.grade_level === classRecord.grade_level && subjectName !== "" && (row.subject_name ?? "") === subjectName)
+      ?? settings.find((row) => row.grade_level === classRecord.grade_level && !(row.subject_name ?? "").trim())
       ?? settings.find((row) => row.grade_level === null && !(row.subject_name ?? "").trim())
       ?? settings[0]
     return { ...defaultRiskThresholds, ...(matching?.risk_thresholds ?? {}) }
   }
-  const selectedRisk = useMemo(() => selectedStudent ? classifyRisk(selectedStudent, { classes, assessments, scores, attendance, settings: riskThresholdsFor(classes.find((item) => item.id === selectedStudent.class_id)) }) : null, [selectedStudent, classes, assessments, scores, attendance, riskSettings])
+  function classifyStudent(student: Student, classRecord: ClassRecord | undefined) {
+    const data = { classes, assessments, scores, attendance, competencyRecords, settings: riskThresholdsFor(classRecord) }
+    return classRecord?.grade_level === 0 || classRecord?.grade_level === 1
+      ? classifyEarlyLearningRisk(student, data, classRecord.school_year)
+      : classifyRisk(student, data, classRecord?.school_year ?? "")
+  }
+  function performanceSummary(risk: ReturnType<typeof classifyRisk>) {
+    if (risk.competencyProgress) {
+      const progress = risk.competencyProgress
+      return progress.rated
+        ? `${progress.rated} ratings · ${progress.concerning} ${progress.concernLabel} · ${progress.developing} ${progress.developingLabel}`
+        : "No competency ratings"
+    }
+    return risk.average === null ? "No score data" : `${risk.average.toFixed(1)}%`
+  }
+  function performanceCellSummary(risk: ReturnType<typeof classifyRisk>, gradeLevel?: number) {
+    if (gradeLevel === 0 || gradeLevel === 1) {
+      const progress = risk.competencyProgress
+      if (!progress?.rated) return "No ratings"
+      const concernCode = gradeLevel === 0 ? "BG" : "E"
+      const developingCode = gradeLevel === 0 ? "DV" : "C/D"
+      return `${progress.rated} rated · ${concernCode} ${progress.concerning} · ${developingCode} ${progress.developing}`
+    }
+    return risk.average === null ? "No score" : `${risk.average.toFixed(1)}%`
+  }
+  const selectedRisk = useMemo(() => selectedStudent ? classifyStudent(selectedStudent, classes.find((item) => item.id === selectedStudent.class_id)) : null, [selectedStudent, classes, assessments, scores, attendance, competencyRecords, riskSettings])
   const selectedStudentSubjects = useMemo(() => selectedStudent ? [...new Set(assessments.filter((item) => item.class_id === selectedStudent.class_id).map((item) => item.subject))] : [], [selectedStudent, assessments])
   const planObjectives = objectives.filter((objective) => objective.plan_id === planId)
   const planSessions = sessions.filter((session) => session.plan_id === planId)
@@ -99,7 +144,7 @@ export default function InterventionsPage() {
   const resetPlanFilters = () => { setPlanSearch(""); setPlanRisk("all"); setPlanStatus("all"); setPlanTeacher("all"); setPlanClass("all"); setPlanPage(1) }
   const riskRows = sortPupilsAlphabetically(students.filter((student) => matchesPupilGender(student.gender, genderFilter))).map((student) => {
     const cls = classes.find((item) => item.id === student.class_id)
-    const risk = classifyRisk(student, { classes, assessments, scores, attendance, settings: riskThresholdsFor(cls) })
+    const risk = classifyStudent(student, cls)
     const focus = risk.subjects.filter((item) => item.belowPassing && item.average !== null).sort((a, b) => (a.average ?? 0) - (b.average ?? 0))[0]
     const focusSubject = focus?.subject ?? risk.subjects.filter((item) => item.average !== null).slice().sort((a, b) => (a.average ?? 0) - (b.average ?? 0))[0]?.subject ?? cls?.subject_name ?? "Academic"
     const displayClass = cls ? { ...cls, subject_name: focusSubject } : cls
@@ -107,7 +152,7 @@ export default function InterventionsPage() {
   }).filter((row) => ["moderate", "high"].includes(row.level))
   const registerRows = students.flatMap<RegisterRow>((student) => {
     const cls = classes.find((item) => item.id === student.class_id)
-    const risk = classifyRisk(student, { classes, assessments, scores, attendance, settings: riskThresholdsFor(cls) })
+    const risk = classifyStudent(student, cls)
     const studentPlans = plans.filter((plan) => plan.student_id === student.id)
     const focus = risk.subjects.filter((item) => item.belowPassing && item.average !== null).sort((a, b) => (a.average ?? 0) - (b.average ?? 0))[0]
       ?? risk.subjects.filter((item) => item.average !== null).slice().sort((a, b) => (a.average ?? 0) - (b.average ?? 0))[0]
@@ -182,22 +227,23 @@ export default function InterventionsPage() {
 
   async function loadData() {
     setLoading(true); setError("")
-    const [{ data: studentData, error: studentError }, { data: classData, error: classError }, { data: assessmentData, error: assessmentError }, { data: scoreData, error: scoreError }, { data: attendanceData, error: attendanceError }, { data: planData, error: planError }, { data: objectiveData, error: objectiveError }, { data: sessionData, error: sessionError }, { data: settingsData, error: settingsError }] = await Promise.all([
+    const [{ data: studentData, error: studentError }, { data: classData, error: classError }, assessmentResult, scoreResult, attendanceResult, competencyResult, { data: planData, error: planError }, { data: objectiveData, error: objectiveError }, { data: sessionData, error: sessionError }, { data: settingsData, error: settingsError }] = await Promise.all([
       supabase.from("students").select("id,class_id,first_name,last_name,student_number,gender,parent_guardian_email").eq("is_active", true).order("last_name").order("first_name"),
       supabase.from("classes").select("id,grade_level,section_name,school_year,subject_name").eq("is_active", true),
-      supabase.from("assessments").select("id,class_id,subject,assessment_date,total_points,passing_percentage,grading_period"),
-      supabase.from("assessment_scores").select("assessment_id,student_id,score,updated_at").order("updated_at", { ascending: true }),
-      supabase.from("attendance").select("student_id,class_id,attendance_date,status"),
+      fetchAllPages((from, to) => supabase.from("assessments").select("id,class_id,subject,assessment_date,total_points,passing_percentage,grading_period").order("assessment_date").order("id").range(from, to)),
+      fetchAllPages((from, to) => supabase.from("assessment_scores").select("assessment_id,student_id,score,updated_at").order("updated_at").order("assessment_id").order("student_id").range(from, to)),
+      fetchAllPages((from, to) => supabase.from("attendance").select("student_id,class_id,attendance_date,status").order("attendance_date").order("student_id").range(from, to)),
+      fetchAllPages((from, to) => supabase.from("competency_records").select("class_id,student_id,grading_period,rating").order("class_id").order("student_id").order("grading_period").range(from, to)),
       supabase.from("intervention_plans").select("id,student_id,title,owner_name,start_date,target_date,goal,baseline,target_performance,success_criteria,status,risk_level,risk_factors").order("updated_at", { ascending: false }),
       supabase.from("intervention_objectives").select("id,plan_id,concern,objective,strategy,resources,frequency,duration_minutes,assigned_teacher,expected_outcome,measurement_method,baseline,target,status").order("created_at"),
       supabase.from("intervention_sessions").select("id,plan_id,session_number,scheduled_date,start_time,end_time,activity,status").order("scheduled_date"),
       supabase.from("grading_settings").select("school_year,grade_level,subject_name,risk_thresholds")
     ])
-    const firstError = studentError ?? classError ?? assessmentError ?? scoreError ?? attendanceError ?? planError ?? objectiveError ?? sessionError ?? settingsError
+    const firstError = studentError ?? classError ?? assessmentResult.error ?? scoreResult.error ?? attendanceResult.error ?? competencyResult.error ?? planError ?? objectiveError ?? sessionError ?? settingsError
     if (firstError) setError(firstError.message)
     const { data: reportData, error: reportError } = await supabase.from("intervention_session_reports").select("session_id,parent_update_pending,attendance,activities_conducted,skills_addressed,observation_results,previous_performance,current_performance,teacher_remarks,participation,challenges,follow_up_actions,next_session_date,supporting_notes,progress_summary")
     if (reportError && !firstError) setError(reportError.message)
-    setStudents(studentData ?? []); setClasses(classData ?? []); setAssessments(assessmentData ?? []); setRiskSettings((settingsData ?? []) as RiskSettingRow[]); setScores(scoreData ?? []); setAttendance(attendanceData ?? []); setPlans(planData ?? []); setObjectives(objectiveData ?? []); setSessions(sessionData ?? []); setSessionReports(reportData ?? [])
+    setStudents(studentData ?? []); setClasses(classData ?? []); setAssessments(assessmentResult.data); setRiskSettings((settingsData ?? []) as RiskSettingRow[]); setScores(scoreResult.data); setAttendance(attendanceResult.data); setCompetencyRecords(competencyResult.data); setPlans(planData ?? []); setObjectives(objectiveData ?? []); setSessions(sessionData ?? []); setSessionReports(reportData ?? [])
     setLoading(false)
   }
   useEffect(() => { const query = new URLSearchParams(window.location.search); const queryStudent = query.get("student"); const createNew = query.get("createPlan") === "1" || Boolean(queryStudent && !query.get("plan")); const plan = query.get("plan"); const tab = query.get("tab"); if (tab === "overview" || tab === "objectives" || tab === "sessions") setActiveTab(tab); void loadData().then(() => { if (queryStudent) setStudentId(queryStudent); if (createNew) { setPlanId(""); setForceNewPlan(true); setCreatePlanOpen(true); setSuggestionOpen(true) } else if (plan) { setPlanId(plan); if (!tab) { setForceNewPlan(true); setCreatePlanOpen(true) } } }) }, [])
@@ -327,7 +373,7 @@ export default function InterventionsPage() {
       <label className="text-sm font-medium">Search pupils, subjects, or plans<input className={inputClass} value={planSearch} onChange={(event) => { setPlanSearch(event.target.value); setPlanPage(1) }} placeholder="Name, student number, subject…" /></label>
       <label className="text-sm font-medium">Risk<select className={inputClass} value={planRisk} onChange={(event) => { setPlanRisk(event.target.value); setPlanPage(1) }}><option value="all">All risks</option><option value="high">High</option><option value="moderate">Moderate</option><option value="low">Low</option><option value="incomplete">Incomplete</option></select></label>
       <label className="text-sm font-medium">Status<select className={inputClass} value={planStatus} onChange={(event) => { setPlanStatus(event.target.value); setPlanPage(1) }}><option value="all">All statuses</option><option value="pending">Needs plan</option><option value="draft">Draft</option><option value="active">Active</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select></label>
-      <label className="text-sm font-medium">Class / section<select className={inputClass} value={planClass} onChange={(event) => { setPlanClass(event.target.value); setPlanPage(1) }}><option value="all">All classes</option>{classes.map((cls) => <option key={cls.id} value={cls.id}>Grade {cls.grade_level} · {cls.section_name}</option>)}</select></label>
+      <label className="text-sm font-medium">Class / section<select className={inputClass} value={planClass} onChange={(event) => { setPlanClass(event.target.value); setPlanPage(1) }}><option value="all">All classes</option>{classes.map((cls) => <option key={cls.id} value={cls.id}>{gradeLevelLabel(cls.grade_level)} · {cls.section_name}</option>)}</select></label>
       <div className="flex items-end gap-3"><PupilGenderFilter value={genderFilter} onChange={(value) => { setGenderFilter(value); setPlanPage(1) }} /><Button type="button" variant="outline" onClick={resetPlanFilters}>Clear filters</Button></div>
     </section>
     {error && <p className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive" role="alert">{error}</p>}
@@ -336,15 +382,16 @@ export default function InterventionsPage() {
     <section className="overflow-hidden rounded-xl border bg-card">
       <div className="border-b p-4"><h2 className="font-semibold">Pupil risk register &amp; interventions</h2><p className="mt-1 text-sm text-muted-foreground">Each intervention plan appears separately, including multiple subject plans for one pupil. Pupils with no plan are included when their risk is moderate or high.</p></div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[980px] text-left text-sm">
+        <table className="w-full min-w-[980px] table-fixed text-left text-sm">
+          <colgroup><col className="w-[18%]" /><col className="w-[15%]" /><col className="w-[17%]" /><col className="w-[11%]" /><col className="w-[15%]" /><col className="w-[10%]" /><col className="w-[14%]" /></colgroup>
           <thead className="bg-muted/40 text-xs uppercase text-muted-foreground"><tr><th className="p-3">Pupil</th><th className="p-3">Class</th><th className="p-3">Performance</th><th className="p-3">Risk</th><th className="p-3">Intervention</th><th className="p-3">Status</th><th className="p-3">Action</th></tr></thead>
           <tbody className="divide-y">
             {visibleRegisterRows.map((row) => {
               const status = row.plan?.status ?? "Needs plan"
               return <tr key={`${row.student.id}-${row.plan?.id ?? "needs-plan"}`} className="hover:bg-muted/20">
                 <td className="p-3"><p className="font-medium">{row.student.last_name}, {row.student.first_name}</p><p className="text-xs text-muted-foreground">{row.student.student_number}</p></td>
-                <td className="p-3">Grade {row.cls?.grade_level ?? "—"} · {row.cls?.section_name ?? "—"}<p className="text-xs text-muted-foreground">{row.cls?.school_year}</p></td>
-                <td className="p-3 tabular-nums">{row.focusAverage === null ? "No score data" : `${row.focusAverage.toFixed(1)}%`}</td>
+                <td className="p-3">{gradeLevelLabel(row.cls?.grade_level)} · {row.cls?.section_name ?? "—"}<p className="text-xs text-muted-foreground">{row.cls?.school_year}</p></td>
+                <td className="p-3 tabular-nums"><span className="block truncate" title={performanceSummary(row.risk)}>{performanceCellSummary(row.risk, row.cls?.grade_level)}</span></td>
                 <td className="p-3"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${row.risk.level === "high" ? "bg-destructive/10 text-destructive" : row.risk.level === "moderate" ? "bg-amber-500/10 text-amber-700 dark:text-amber-300" : "bg-muted text-muted-foreground"}`}>{row.risk.label}</span></td>
                 <td className="max-w-48 p-3"><p className="truncate">{row.plan?.title ?? "Not created"}</p>{row.plan?.target_date && <p className="text-xs text-muted-foreground">Review by {row.plan.target_date}</p>}</td>
                 <td className="p-3"><span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${row.plan?.status === "active" ? "border-primary/40 bg-primary/10 text-primary" : row.plan?.status === "completed" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"}`}>{status}</span></td>
@@ -372,7 +419,7 @@ export default function InterventionsPage() {
       <label className="text-sm font-medium">Search pupils, subjects, or plans<input className={inputClass} value={planSearch} onChange={(event) => { setPlanSearch(event.target.value); setPlanPage(1) }} placeholder="Name, student number, subject…" /></label>
       <label className="text-sm font-medium">Risk<select className={inputClass} value={planRisk} onChange={(event) => { setPlanRisk(event.target.value); setPlanPage(1) }}><option value="all">All risks</option><option value="high">High</option><option value="moderate">Moderate</option><option value="low">Low</option><option value="incomplete">Incomplete</option></select></label>
       <label className="text-sm font-medium">Status<select className={inputClass} value={planStatus} onChange={(event) => { setPlanStatus(event.target.value); setPlanPage(1) }}><option value="all">All statuses</option><option value="active">Active</option><option value="pending">Pending plan</option></select></label>
-      <label className="text-sm font-medium">Class / section<select className={inputClass} value={planClass} onChange={(event) => { setPlanClass(event.target.value); setPlanPage(1) }}><option value="all">All classes</option>{classes.map((cls) => <option key={cls.id} value={cls.id}>Grade {cls.grade_level} · {cls.section_name}</option>)}</select></label>
+      <label className="text-sm font-medium">Class / section<select className={inputClass} value={planClass} onChange={(event) => { setPlanClass(event.target.value); setPlanPage(1) }}><option value="all">All classes</option>{classes.map((cls) => <option key={cls.id} value={cls.id}>{gradeLevelLabel(cls.grade_level)} · {cls.section_name}</option>)}</select></label>
       <div className="flex items-end gap-3"><PupilGenderFilter value={genderFilter} onChange={(value) => { setGenderFilter(value); setPlanPage(1) }} /><Button type="button" variant="outline" onClick={resetPlanFilters}>Clear filters</Button></div>
     </section>
     {error && <p className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive" role="alert">{error}</p>}
@@ -380,7 +427,8 @@ export default function InterventionsPage() {
     <section className="overflow-hidden rounded-xl border bg-card">
       <div className="border-b p-4"><h2 className="font-semibold">Pupil risk register &amp; interventions</h2><p className="mt-1 text-sm text-muted-foreground">{registerRows.length} pupils need review or have an active plan. Pending plans include both unplanned pupils and saved drafts.</p></div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[980px] text-left text-sm">
+        <table className="w-full min-w-[980px] table-fixed text-left text-sm">
+          <colgroup><col className="w-[18%]" /><col className="w-[15%]" /><col className="w-[17%]" /><col className="w-[11%]" /><col className="w-[15%]" /><col className="w-[10%]" /><col className="w-[14%]" /></colgroup>
           <thead className="bg-muted/40 text-xs uppercase text-muted-foreground"><tr><th className="p-3">Pupil</th><th className="p-3">Class</th><th className="p-3">Performance</th><th className="p-3">Risk</th><th className="p-3">Intervention</th><th className="p-3">Status</th><th className="p-3">Action</th></tr></thead>
           <tbody className="divide-y">
             {visibleRegisterRows.map((row) => {
@@ -390,8 +438,8 @@ export default function InterventionsPage() {
               const status = activePlan ? "Active" : "Pending plan"
               return <tr key={row.student.id} className="hover:bg-muted/20">
                 <td className="p-3"><p className="font-medium">{row.student.last_name}, {row.student.first_name}</p><p className="text-xs text-muted-foreground">{row.student.student_number}</p></td>
-                <td className="p-3">Grade {row.cls?.grade_level ?? "—"} · {row.cls?.section_name ?? "—"}<p className="text-xs text-muted-foreground">{row.cls?.school_year}</p></td>
-                <td className="p-3 tabular-nums">{row.focusAverage === null ? "No score data" : `${row.focusAverage.toFixed(1)}%`}</td>
+                <td className="p-3">{gradeLevelLabel(row.cls?.grade_level)} · {row.cls?.section_name ?? "—"}<p className="text-xs text-muted-foreground">{row.cls?.school_year}</p></td>
+                <td className="p-3 tabular-nums"><span className="block truncate" title={performanceSummary(row.risk)}>{performanceCellSummary(row.risk, row.cls?.grade_level)}</span></td>
                 <td className="p-3"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${row.risk.level === "high" ? "bg-destructive/10 text-destructive" : row.risk.level === "moderate" ? "bg-amber-500/10 text-amber-700 dark:text-amber-300" : "bg-muted text-muted-foreground"}`}>{row.risk.label}</span></td>
                 <td className="max-w-48 p-3"><p className="truncate">{displayPlan?.title ?? "Not created"}</p>{displayPlan?.target_date && <p className="text-xs text-muted-foreground">Review by {displayPlan.target_date}</p>}</td>
                 <td className="p-3"><span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${activePlan ? "border-primary/40 bg-primary/10 text-primary" : "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"}`}>{status}</span></td>

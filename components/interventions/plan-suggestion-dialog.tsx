@@ -4,7 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import { WandSparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
+	interventionFocusOptions,
 	suggestInterventionPlan,
+	type InterventionFocus,
 	type SuggestedInterventionPlan,
 } from "@/lib/intervention-planner";
 import type { RiskClass } from "@/lib/risk-engine";
@@ -28,6 +30,7 @@ export function PlanSuggestionDialog({
 	onApply: (suggestion: SuggestedInterventionPlan) => void;
 }) {
 	const [subject, setSubject] = useState("");
+	const [focus, setFocus] = useState<InterventionFocus>("recommended");
 	const [teacherContext, setTeacherContext] = useState("");
 	const [suggestion, setSuggestion] =
 		useState<SuggestedInterventionPlan | null>(null);
@@ -51,6 +54,7 @@ export function PlanSuggestionDialog({
 			sessionStorage.getItem("interventionTeacherContext") ?? "";
 		sessionStorage.removeItem("interventionTeacherContext");
 		setSubject(suggestedSubject);
+		setFocus("recommended");
 		setTeacherContext(savedTeacherContext);
 		setSuggestion(
 			risk
@@ -58,6 +62,7 @@ export function PlanSuggestionDialog({
 						risk,
 						subject: suggestedSubject,
 						teacherContext: savedTeacherContext,
+						focus: "recommended",
 					})
 				: null,
 		);
@@ -65,7 +70,16 @@ export function PlanSuggestionDialog({
 
 	function generateSuggestion() {
 		if (!risk) return;
-		setSuggestion(suggestInterventionPlan({ risk, subject, teacherContext }));
+		setSuggestion(suggestInterventionPlan({ risk, subject, teacherContext, focus }));
+	}
+
+	function changeFocus(value: InterventionFocus) {
+		setFocus(value);
+		if (risk) {
+			setSuggestion(
+				suggestInterventionPlan({ risk, subject, teacherContext, focus: value }),
+			);
+		}
 	}
 
 	function updateSuggestion(
@@ -133,6 +147,26 @@ export function PlanSuggestionDialog({
 									))}
 								</select>
 							</label>
+							<label className='text-sm font-medium'>
+								Suggestion focus
+								<select
+									className={fieldClass}
+									value={focus}
+									onChange={(event) => {
+										const option = interventionFocusOptions.find(
+											(item) => item.value === event.target.value,
+										);
+										if (option) changeFocus(option.value);
+									}}
+								>
+									{interventionFocusOptions.map((item) => (
+										<option key={item.value} value={item.value}>{item.label}</option>
+									))}
+								</select>
+								<span className='mt-1 block text-xs font-normal text-muted-foreground'>
+									Choose the main need; you can edit every suggested field.
+								</span>
+							</label>
 							<div className='rounded-lg border bg-muted/30 p-3 text-sm'>
 								<p className='font-medium'>
 									Risk level: <span className='capitalize'>{risk.level}</span>
@@ -166,7 +200,10 @@ export function PlanSuggestionDialog({
 									? `Screening evidence: ${risk.factors.join(" ")}`
 									: "No specific screening factors were recorded."}
 							</p>
-							{/* <Button type="button" variant="outline" onClick={generateSuggestion}><WandSparkles data-icon="inline-start" />Generate suggestion</Button> */}
+							<Button type='button' variant='outline' onClick={generateSuggestion}>
+								<WandSparkles data-icon='inline-start' />
+								Refresh suggestion
+							</Button>
 						</div>
 						{suggestion && (
 							<div className='mt-4 grid gap-4 rounded-xl border bg-muted/20 p-4 sm:grid-cols-2'>
@@ -211,6 +248,14 @@ export function PlanSuggestionDialog({
 									/>
 								</label>
 								<label className='text-sm font-medium sm:col-span-2'>
+									Concern
+									<input
+										className={fieldClass}
+										value={suggestion.concern}
+										onChange={(event) => updateSuggestion("concern", event.target.value)}
+									/>
+								</label>
+								<label className='text-sm font-medium sm:col-span-2'>
 									First objective
 									<textarea
 										className={fieldClass}
@@ -237,6 +282,57 @@ export function PlanSuggestionDialog({
 										value={suggestion.successCriteria}
 										onChange={(event) =>
 											updateSuggestion("successCriteria", event.target.value)
+										}
+									/>
+								</label>
+								<label className='text-sm font-medium sm:col-span-2'>
+									Resources
+									<textarea
+										className={fieldClass}
+										value={suggestion.resources}
+										onChange={(event) =>
+											updateSuggestion("resources", event.target.value)
+										}
+									/>
+								</label>
+								<label className='text-sm font-medium'>
+									Support frequency
+									<input
+										className={fieldClass}
+										value={suggestion.frequency}
+										onChange={(event) =>
+											updateSuggestion("frequency", event.target.value)
+										}
+									/>
+								</label>
+								<label className='text-sm font-medium'>
+									Minutes per session
+									<input
+										className={fieldClass}
+										inputMode='numeric'
+										value={suggestion.durationMinutes}
+										onChange={(event) =>
+											updateSuggestion("durationMinutes", event.target.value)
+										}
+									/>
+								</label>
+								<label className='text-sm font-medium sm:col-span-2'>
+									Expected outcome
+									<textarea
+										className={fieldClass}
+										value={suggestion.expectedOutcome}
+										onChange={(event) =>
+											updateSuggestion("expectedOutcome", event.target.value)
+										}
+									/>
+								</label>
+								<label className='text-sm font-medium sm:col-span-2'>
+									How progress will be measured
+									<textarea
+										className={fieldClass}
+										value={suggestion.measurementMethod}
+										onChange={(event) =>
+											updateSuggestion("measurementMethod", event.target.value)
 										}
 									/>
 								</label>

@@ -9,6 +9,7 @@ export type RiskClass = {
   failed: number
   absences: number
   lates: number
+  attendanceRecords: number
   attendanceRate: number | null
   assessed: string | null
   subjects: Array<{ subject: string; average: number | null; passing: number; belowPassing: boolean; recorded: number }>
@@ -19,6 +20,13 @@ export type RiskClass = {
   attendancePoints: number
   totalPoints: number
   scoreBreakdown: Array<{ area: "Academic" | "Attendance"; label: string; detail: string; points: number }>
+  competencyProgress?: {
+    rated: number
+    concerning: number
+    developing: number
+    concernLabel: string
+    developingLabel: string
+  }
 }
 
 export type RiskThresholds = {
@@ -38,6 +46,7 @@ export type RiskClassRecord = { id: string; grade_level?: number; section_name?:
 export type RiskAssessment = { id: string; class_id: string; subject: string; assessment_date: string; total_points: number; passing_percentage: number }
 export type RiskScore = { assessment_id: string; student_id: string; score: number | null; updated_at?: string }
 export type RiskAttendance = { student_id: string; class_id: string; attendance_date: string; status: "present" | "absent" | "late" | "excused" }
+export type RiskCompetencyRecord = { class_id: string; student_id: string; grading_period: string; rating: string }
 export type RiskIntervention = { student_id: string; status: string; target_review_date?: string | null; updated_at?: string | null }
 
 export type RiskData = {
@@ -45,6 +54,7 @@ export type RiskData = {
   assessments: RiskAssessment[]
   scores: RiskScore[]
   attendance: RiskAttendance[]
+  competencyRecords?: RiskCompetencyRecord[]
   interventions?: RiskIntervention[]
   settings: RiskThresholds
 }
@@ -55,14 +65,140 @@ function latestScore(scores: RiskScore[], assessmentId: string, studentId: strin
   return scores.filter((score) => score.assessment_id === assessmentId && score.student_id === studentId).sort((a, b) => String(a.updated_at ?? "").localeCompare(String(b.updated_at ?? ""))).at(-1)
 }
 
+function attendanceMatchesSchoolYear(attendanceDate: string, schoolYear: string) {
+  if (!schoolYear) return true
+  const years = schoolYear.match(/\d{4}/g)
+  return years?.some((year) => attendanceDate.startsWith(year)) ?? attendanceDate.startsWith(schoolYear.slice(0, 4))
+}
+
+export function classifyEarlyLearningRisk(student: RiskStudent, data: RiskData, schoolYear = "", period = ""): RiskClass {
+  const studentClass = data.classes.find((item) => item.id === student.class_id)
+  const gradeLevel = studentClass?.grade_level
+  const isKinder = gradeLevel === 0
+  const concernRatings = isKinder ? ["BG"] : ["E"]
+  const developingRatings = isKinder ? ["DV"] : ["C", "D"]
+  const concernLabel = isKinder ? "Beginning (BG)" : "Emerging (E)"
+  const developingLabel = isKinder ? "Developing (DV)" : "Connecting/Developing (C/D)"
+  const records = (data.competencyRecords ?? []).filter((record) =>
+    record.class_id === student.class_id &&
+    record.student_id === student.id &&
+    (!period || periodKeyForSchoolYear(record.grading_period, studentClass?.school_year) === period),
+  )
+  const concerning = records.filter((record) => concernRatings.includes(record.rating)).length
+  const developing = records.filter((record) => developingRatings.includes(record.rating)).length
+  const rated = records.length
+  const absentRecords = data.attendance.filter((item) =>
+    item.student_id === student.id &&
+    item.class_id === student.class_id &&
+    item.status === "absent" &&
+    attendanceMatchesSchoolYear(item.attendance_date, schoolYear),
+  )
+  const lateRecords = data.attendance.filter((item) =>
+    item.student_id === student.id &&
+    item.class_id === student.class_id &&
+    item.status === "late" &&
+    attendanceMatchesSchoolYear(item.attendance_date, schoolYear),
+  )
+  const countedAttendance = data.attendance.filter((item) =>
+    item.student_id === student.id &&
+    item.class_id === student.class_id &&
+    item.status !== "excused" &&
+    attendanceMatchesSchoolYear(item.attendance_date, schoolYear),
+  )
+  const attendanceRecords = data.attendance.filter((item) =>
+    item.student_id === student.id &&
+    item.class_id === student.class_id &&
+    attendanceMatchesSchoolYear(item.attendance_date, schoolYear),
+  ).length
+  const attendanceRate = countedAttendance.length
+    ? ((countedAttendance.length - absentRecords.length) / countedAttendance.length) * 100
+    : null
+  const attendanceRateConcern = data.settings.attendance_rate_concern ?? 90
+  const repeatedLateness = data.settings.repeated_lateness ?? 3
+  const missing: string[] = []
+  const factors: string[] = []
+  const rules: string[] = []
+  if (!rated) missing.push("No non-numeric competency ratings are available for the selected period.")
+  if (!countedAttendance.length) missing.push("No attendance records are available for the selected school year.")
+
+  const concerningShare = rated ? concerning / rated : 0
+  const developingShare = rated ? developing / rated : 0
+  const competencyConcernPoints = concerning
+    ? concerningShare >= 0.2 ? 2 : 1
+    : 0
+  const developingPoints = developingShare >= 0.5 ? 1 : 0
+  if (concerning) {
+    factors.push(`${concerning} competencies are rated ${concernLabel}.`)
+    rules.push("Competency descriptor needing support")
+  }
+  if (developingPoints) {
+    factors.push(`${developing} of ${rated} competencies are rated ${developingLabel}.`)
+    rules.push("Frequent developing competency descriptors")
+  }
+
+  const absencePoints = absentRecords.length >= data.settings.attendance_concern_absences ? 2 : 0
+  const attendanceRatePoints = attendanceRate !== null && attendanceRate < attendanceRateConcern ? 2 : 0
+  const latenessPoints = lateRecords.length >= repeatedLateness ? 1 : 0
+  if (absentRecords.length >= data.settings.attendance_concern_absences) {
+    factors.push(`${absentRecords.length} recorded absences.`)
+    rules.push("Absence frequency threshold")
+  }
+  if (attendanceRatePoints) {
+    factors.push(`Attendance rate is ${attendanceRate!.toFixed(1)}%, below the ${attendanceRateConcern}% concern threshold.`)
+    rules.push("Attendance rate threshold")
+  }
+  if (latenessPoints) {
+    factors.push(`${lateRecords.length} recorded late arrivals.`)
+    rules.push("Repeated lateness threshold")
+  }
+
+  const scoreBreakdown = [
+    { area: "Academic" as const, label: `${concernLabel} ratings`, detail: `${concerning} of ${rated} competency ratings; 20% or more adds 2 points`, points: competencyConcernPoints },
+    { area: "Academic" as const, label: `${developingLabel} ratings`, detail: `${developing} of ${rated} competency ratings; at least 50% adds 1 point`, points: developingPoints },
+    { area: "Attendance" as const, label: "Recorded absences", detail: `${absentRecords.length} absences; concern threshold ${data.settings.attendance_concern_absences}`, points: absencePoints },
+    { area: "Attendance" as const, label: "Attendance rate", detail: attendanceRate === null ? "No counted attendance records" : `${attendanceRate.toFixed(1)}%; concern threshold ${attendanceRateConcern}%`, points: attendanceRatePoints },
+    { area: "Attendance" as const, label: "Late arrivals", detail: `${lateRecords.length} late arrivals; concern threshold ${repeatedLateness}`, points: latenessPoints },
+  ]
+  const academicPoints = competencyConcernPoints + developingPoints
+  const attendancePoints = absencePoints + attendanceRatePoints + latenessPoints
+  const total = academicPoints + attendancePoints
+  let level: RiskLevel = "incomplete"
+  if (rated && countedAttendance.length) {
+    level = total >= data.settings.high_risk_score
+      ? "high"
+      : total >= data.settings.moderate_risk_score ? "moderate" : "low"
+  }
+  return {
+    level,
+    label: labels[level],
+    average: null,
+    failed: concerning,
+    absences: absentRecords.length,
+    lates: lateRecords.length,
+    attendanceRecords,
+    attendanceRate,
+    assessed: null,
+    subjects: [],
+    factors,
+    missing,
+    rules,
+    academicPoints,
+    attendancePoints,
+    totalPoints: total,
+    scoreBreakdown,
+    competencyProgress: { rated, concerning, developing, concernLabel, developingLabel },
+  }
+}
+
 export function classifyRisk(student: RiskStudent, data: RiskData, schoolYear = "", period = ""): RiskClass {
   const studentClass = data.classes.find((item) => item.id === student.class_id)
   const assessments = data.assessments.filter((item) => item.class_id === student.class_id && (!schoolYear || studentClass?.school_year === schoolYear) && (!period || periodKeyForSchoolYear((item as RiskAssessment & { grading_period?: string }).grading_period, studentClass?.school_year) === period))
   const scored = assessments.map((assessment) => ({ assessment, score: latestScore(data.scores, assessment.id, student.id) })).filter((item) => item.score?.score !== null && item.score?.score !== undefined)
   const percentages = scored.map(({ assessment, score }) => Number(score!.score) / Number(assessment.total_points) * 100).filter((value) => Number.isFinite(value))
-  const absentRecords = data.attendance.filter((item) => item.student_id === student.id && item.status === "absent" && (!schoolYear || item.attendance_date.startsWith(schoolYear.slice(0, 4))))
-  const lateRecords = data.attendance.filter((item) => item.student_id === student.id && item.status === "late" && (!schoolYear || item.attendance_date.startsWith(schoolYear.slice(0, 4))))
-  const countedAttendance = data.attendance.filter((item) => item.student_id === student.id && item.status !== "excused" && (!schoolYear || item.attendance_date.startsWith(schoolYear.slice(0, 4))))
+  const absentRecords = data.attendance.filter((item) => item.student_id === student.id && item.status === "absent" && attendanceMatchesSchoolYear(item.attendance_date, schoolYear))
+  const lateRecords = data.attendance.filter((item) => item.student_id === student.id && item.status === "late" && attendanceMatchesSchoolYear(item.attendance_date, schoolYear))
+  const countedAttendance = data.attendance.filter((item) => item.student_id === student.id && item.status !== "excused" && attendanceMatchesSchoolYear(item.attendance_date, schoolYear))
+  const attendanceRecords = data.attendance.filter((item) => item.student_id === student.id && attendanceMatchesSchoolYear(item.attendance_date, schoolYear)).length
   const attendanceRate = countedAttendance.length ? ((countedAttendance.length - absentRecords.length) / countedAttendance.length) * 100 : null
   const average = percentages.length ? percentages.reduce((sum, value) => sum + value, 0) / percentages.length : null
   const failed = scored.filter(({ assessment, score }) => Number(score!.score) / Number(assessment.total_points) * 100 < Number(assessment.passing_percentage)).length
@@ -109,5 +245,5 @@ export function classifyRisk(student: RiskStudent, data: RiskData, schoolYear = 
   const total = academicPoints + attendancePoints
   let level: RiskLevel = "incomplete"
   if (scored.length && countedAttendance.length) level = total >= data.settings.high_risk_score ? "high" : total >= data.settings.moderate_risk_score ? "moderate" : "low"
-  return { level, label: labels[level], average, failed, absences: absentRecords.length, lates: lateRecords.length, attendanceRate, assessed: scored.length ? scored.map(({ assessment }) => assessment.assessment_date).sort().at(-1) ?? null : null, subjects, factors, missing, rules, academicPoints, attendancePoints, totalPoints: total, scoreBreakdown }
+  return { level, label: labels[level], average, failed, absences: absentRecords.length, lates: lateRecords.length, attendanceRecords, attendanceRate, assessed: scored.length ? scored.map(({ assessment }) => assessment.assessment_date).sort().at(-1) ?? null : null, subjects, factors, missing, rules, academicPoints, attendancePoints, totalPoints: total, scoreBreakdown }
 }

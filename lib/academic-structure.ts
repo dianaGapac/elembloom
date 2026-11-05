@@ -328,7 +328,10 @@ export function gradeOnePaceCompetenciesForSubject(subject: string | null | unde
   const normalized = normalizeGradeOneSubject(subject)
   const entry = Object.entries(gradeOnePaceCompetencies).find(([name]) =>
     normalizeGradeOneSubject(name) === normalized ||
-    (normalized === "reading and literacy" && name === "Reading & Literacy"),
+    (
+      ["reading and literacy", "language", "english", "english language"].includes(normalized) &&
+      name === "Reading & Literacy"
+    ),
   )
   const competencies = entry?.[1] ?? []
   if (!gradingPeriod) return competencies

@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { Fragment, useMemo, useState } from "react"
+import { Fragment, useEffect, useMemo, useState } from "react"
 import useSWR from "swr"
 import { ArrowDownToLine, ArrowLeft, ChevronDown, FileSpreadsheet, Medal, Search } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
@@ -77,6 +77,7 @@ function GradingWeightsPanel({
 
 export default function ClassRecordsPage() {
   const { data, error, isLoading } = useSWR("class-records", fetcher)
+  const [mounted, setMounted] = useState(false)
   const [classId, setClassId] = useState("")
   const [subjectId, setSubjectId] = useState("")
   const [period, setPeriod] = useState("")
@@ -88,6 +89,7 @@ export default function ClassRecordsPage() {
   const [statusFilter, setStatusFilter] = useState("all")
   const [genderFilter, setGenderFilter] = useState<PupilGenderFilterValue>("all")
   const [exportOpen, setExportOpen] = useState(false)
+  useEffect(() => setMounted(true), [])
   const classes = data?.classes ?? []
   const selectedClass = classes.find((item) => item.id === classId) ?? classes[0]
   const subjects = (data?.subjects ?? []).filter((item) => item.class_id === selectedClass?.id)
@@ -124,10 +126,12 @@ export default function ClassRecordsPage() {
     ...kinderCompetencies,
     ...competencyRecords.map((item) => item.competency).filter((name) => !paceCompetencies.includes(name)),
   ])]
-  const competencyPupils = sortPupilsAlphabetically((data?.students ?? []).filter((student) =>
-    student.class_id === selectedClass?.id &&
-    (data?.enrollments ?? []).some((enrollment) => enrollment.class_id === selectedClass?.id && enrollment.student_id === student.id),
-  ))
+  const competencyPupils = isProgressClass
+    ? sortPupilsAlphabetically((data?.students ?? []).filter((student) =>
+        student.class_id === selectedClass?.id &&
+        (data?.enrollments ?? []).some((enrollment) => enrollment.class_id === selectedClass?.id && enrollment.student_id === student.id),
+      ))
+    : []
   const termReports = (data?.reports ?? []).filter((report) =>
     report.class_id === selectedClass?.id &&
     report.school_year === selectedClass?.school_year &&
@@ -219,7 +223,7 @@ export default function ClassRecordsPage() {
         record.student_id === student.id &&
         periodKeyForSchoolYear(record.grading_period, selectedClass?.school_year) === termKey,
       )
-      const ratingCounts = Object.fromEntries(earlyLearningPolicies[selectedClass?.grade_level as 0 | 1].ratings.map((rating) => [
+      const ratingCounts = Object.fromEntries((earlyLearningPolicies[selectedClass?.grade_level as 0 | 1]?.ratings ?? []).map((rating) => [
         rating.value,
         termRecords.filter((record) => record.rating === rating.value && termCompetencies.includes(record.competency)).length,
       ]))
@@ -289,13 +293,13 @@ export default function ClassRecordsPage() {
     }
     setExportOpen(false)
   }
-  if (isLoading) return <main className="mx-auto max-w-7xl p-6"><p className="text-sm text-muted-foreground">Loading class records…</p></main>
-  if (error) return <main className="mx-auto max-w-7xl p-6"><p className="text-sm text-destructive">Unable to load class records.</p></main>
+  if (!mounted || isLoading) return <div className="mx-auto max-w-7xl p-6"><p suppressHydrationWarning className="text-sm text-muted-foreground">Loading class records…</p></div>
+  if (error) return <div className="mx-auto max-w-7xl p-6"><p className="text-sm text-destructive">Unable to load class records.</p></div>
   const quarterAssessments = prepared?.assessments ?? []
   const displayWeights = savedWeights ?? fallbackWeights
   const byCategory = categories.map((category) => ({ category, items: quarterAssessments.filter((item) => item.category === category), weight: displayWeights[category] }))
   return (
-    <main className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
+    <div className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
         <div>
           <Link href="/classes" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="size-4" />Classes</Link>
@@ -409,7 +413,7 @@ export default function ClassRecordsPage() {
         <Pagination page={page} totalItems={visibleRows.length} onPageChange={setPage} />
         {!visibleRows.length && <p className="p-10 text-center text-sm text-muted-foreground">No pupils match the current filters.</p>}
       </section> : <SummaryTable summary={prepared?.summary ?? []} periods={summaryPeriods} search={search} genderFilter={genderFilter} onGenderChange={setGenderFilter} />}
-    </main>
+    </div>
   )
 }
 
@@ -525,17 +529,19 @@ function CompetencyRecordTable({ pupils, competencyNames, records, reports, clas
 }) {
   const [page, setPage] = useState(1)
   const pagePupils = pupils.slice((page - 1) * DEFAULT_PAGE_SIZE, page * DEFAULT_PAGE_SIZE)
-  if (gradeLevel === 1) {
+  if (gradeLevel <= 1) {
+    const isGradeOne = gradeLevel === 1
     return <section className="overflow-hidden rounded-xl border bg-card">
-      <div className="flex flex-col gap-2 border-b p-4">
+      <div className="flex flex-col justify-between gap-3 border-b p-4 sm:flex-row sm:items-center">
         <div>
-          <h3 className="font-semibold">Grade 1 pupils · {subjectName}</h3>
-          <p className="text-sm text-muted-foreground">{termName} · Open a pupil to enter or update their PACE ratings and term narrative. PACE uses A–E ratings; numeric grades do not apply.</p>
+          <h3 className="font-semibold">{isGradeOne ? "Grade 1 pupils" : "Kinder pupils"} · {subjectName}</h3>
+          <p className="text-sm text-muted-foreground">{termName} · Open a pupil to enter or update {isGradeOne ? "PACE ratings" : "competency ratings"} and their term narrative. Numeric grades do not apply.</p>
         </div>
+        <Link href="/competency-records" className="text-sm font-medium text-primary hover:underline">Manage competencies</Link>
       </div>
       {pupils.length ? <div className="overflow-x-auto">
         <table className="w-full min-w-[720px] text-left text-sm">
-          <thead className="bg-primary text-xs text-primary-foreground"><tr><th className="px-4 py-3">Pupil</th><th className="px-4 py-3">Student number</th><th className="px-4 py-3">PACE progress</th><th className="px-4 py-3">Term narrative</th><th className="px-4 py-3 text-right">Action</th></tr></thead>
+          <thead className="bg-primary text-xs text-primary-foreground"><tr><th className="px-4 py-3">Pupil</th><th className="px-4 py-3">Student number</th><th className="px-4 py-3">{isGradeOne ? "PACE progress" : "Competency progress"}</th><th className="px-4 py-3">Term narrative</th><th className="px-4 py-3 text-right">Action</th></tr></thead>
           <tbody className="divide-y">{pagePupils.map((pupil) => {
             const ratedCount = competencyNames.filter((name) => records.some((record) => record.student_id === pupil.id && record.competency === name)).length
             const report = reports.find((item) => item.student_id === pupil.id)
@@ -544,7 +550,7 @@ function CompetencyRecordTable({ pupils, competencyNames, records, reports, clas
             return <tr key={pupil.id} className="hover:bg-muted/30">
               <td className="px-4 py-3 font-medium">{pupil.last_name}, {pupil.first_name}</td>
               <td className="px-4 py-3 text-muted-foreground">{pupil.student_number}</td>
-              <td className="px-4 py-3">{ratedCount} / {competencyNames.length} competencies rated</td>
+              <td className="px-4 py-3">{ratedCount} / {competencyNames.length} {isGradeOne ? "PACE ratings" : "competencies rated"}</td>
               <td className="px-4 py-3">{hasNarrative ? <span className="text-primary">Entered</span> : <span className="text-muted-foreground">Not entered</span>}</td>
               <td className="px-4 py-3 text-right"><Link href={editHref} className="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-accent hover:text-accent-foreground">View / Edit</Link></td>
             </tr>
