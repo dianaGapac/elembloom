@@ -1,6 +1,7 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { useSWRConfig } from "swr"
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { ButtonLoading, PageLoading } from "@/components/loading-states"
@@ -11,12 +12,50 @@ import { seedGrade2SampaguitaSample } from "@/lib/grade2-sample-seed"
 type Settings = { id?: string; teacher_id?: string; school_year: string; grade_level: number | null; subject_name: string; passing_grade: number; decimal_places: number; rounding_method: string; grading_weights: CategoryWeights; grade_conversion_rules: { bands: { label: string; min: number; max: number }[] }; attendance_rules: { late_counts_as_attended: boolean; excused_excluded_from_denominator: boolean; absence_warning_threshold: number; repeated_lateness_threshold: number }; risk_thresholds: { low_assessment_threshold: number; repeated_failed_assessments: number; attendance_concern_absences: number; moderate_risk_score: number; high_risk_score: number } }
 const defaults: Settings = { school_year: "2026–2027", grade_level: null, subject_name: "", passing_grade: 75, decimal_places: 2, rounding_method: "half_up", grading_weights: { "Written/Oral Works": 20, "Product/Performance Tasks": 50, Examinations: 30 }, grade_conversion_rules: { bands: [{ label: "Advancing", min: 90, max: 100 }, { label: "Benchmarking", min: 80, max: 89 }, { label: "Connecting", min: 75, max: 79 }, { label: "Developing", min: 65, max: 74 }, { label: "Emerging", min: 60, max: 64 }] }, attendance_rules: { late_counts_as_attended: true, excused_excluded_from_denominator: true, absence_warning_threshold: 3, repeated_lateness_threshold: 3 }, risk_thresholds: { low_assessment_threshold: 75, repeated_failed_assessments: 2, attendance_concern_absences: 5, moderate_risk_score: 2, high_risk_score: 4 } }
 const inputClass = "mt-2 w-full rounded-lg border bg-background px-3 py-2 text-sm"
-const defaultPeriods = [1, 2, 3].map((quarter_number) => ({ quarter_number, display_name: ["First Term", "Second Term", "Third Term"][quarter_number - 1], short_label: `T${quarter_number}`, start_date: `2026-${String(quarter_number * 3 - 2).padStart(2, "0")}-01`, end_date: `2026-${String(quarter_number * 3).padStart(2, "0")}-28`, status: "open" }))
+const defaultPeriodsFor = (schoolYear: string) => {
+  const startYear = Number(schoolYear.match(/\d{4}/)?.[0]) || 2026
+  const yearOffset = startYear - 2026
+  return [1, 2, 3].map((quarter_number) => ({
+    quarter_number,
+    display_name: ["First Term", "Second Term", "Third Term"][quarter_number - 1],
+    short_label: `T${quarter_number}`,
+    start_date: `${2026 + yearOffset}-${String(quarter_number * 3 - 2).padStart(2, "0")}-01`,
+    end_date: `${2026 + yearOffset}-${String(quarter_number * 3).padStart(2, "0")}-28`,
+    status: "open",
+  }))
+}
+
+type GradingPeriodRow = {
+  quarter_number: number
+  display_name: string
+  short_label: string
+  start_date: string
+  end_date: string
+  status: string
+}
+
+function normalizePeriods(periods: GradingPeriodRow[], schoolYear: string) {
+  return periods
+    .filter((item) => !(isTrimesterSchoolYear(schoolYear) && normalizePeriod(item.short_label) === "Q4"))
+    .map((item) => {
+      if (!isTrimesterSchoolYear(schoolYear)) return item
+      const quarter = Number(item.short_label.match(/[1-3]/)?.[0])
+      if (quarter >= 1 && quarter <= 3) {
+        return {
+          ...item,
+          short_label: `T${quarter}`,
+          display_name: ["First Term", "Second Term", "Third Term"][quarter - 1],
+        }
+      }
+      return item
+    })
+}
 
 export default function SettingsPage() {
   const supabase = useMemo(() => createClient(), [])
+  const { mutate: mutateSWR } = useSWRConfig()
   const [settings, setSettings] = useState<Settings>(defaults)
-  const [periods, setPeriods] = useState(defaultPeriods)
+  const [periods, setPeriods] = useState(() => defaultPeriodsFor(defaults.school_year))
   const [tab, setTab] = useState("grading")
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -26,7 +65,13 @@ export default function SettingsPage() {
   const [error, setError] = useState("")
   const [gmailStatus, setGmailStatus] = useState<{ isAdmin: boolean; connected: boolean; email?: string | null } | null>(null)
   const [gmailStatusError, setGmailStatusError] = useState("")
+  const previousSchoolYear = useRef(defaults.school_year)
   useEffect(() => { void loadSettings() }, [])
+  useEffect(() => {
+    if (previousSchoolYear.current === settings.school_year) return
+    previousSchoolYear.current = settings.school_year
+    void loadPeriods(settings.school_year)
+  }, [settings.school_year])
   useEffect(() => {
     const result = new URLSearchParams(window.location.search).get("gmail")
     if (result === "connected") setMessage("Central Gmail connected. ElemBloom emails will use this sender.")
@@ -48,15 +93,29 @@ export default function SettingsPage() {
     const { data: periodData, error: periodError } = await supabase.from("grading_periods").select("quarter_number,display_name,short_label,start_date,end_date,status").eq("teacher_id", user.id).eq("school_year", defaults.school_year).order("quarter_number")
     if (loadError || periodError) setError(loadError?.message ?? periodError?.message ?? "Could not load settings.")
     else if (data) setSettings({ ...defaults, ...data, grading_weights: normalizeCategoryWeights(data.grading_weights ?? null, defaults.grading_weights), grade_conversion_rules: data.grade_conversion_rules ?? defaults.grade_conversion_rules, attendance_rules: { ...defaults.attendance_rules, ...(data.attendance_rules ?? {}) }, risk_thresholds: { ...defaults.risk_thresholds, ...(data.risk_thresholds ?? {}) } })
-    if (!periodError && periodData?.length) setPeriods(periodData
-      .filter((item) => !(isTrimesterSchoolYear(defaults.school_year) && normalizePeriod(item.short_label) === "Q4"))
-      .map((item) => {
-        if (!isTrimesterSchoolYear(defaults.school_year)) return item
-        const quarter = Number(item.short_label.match(/[1-3]/)?.[0])
-        if (quarter >= 1 && quarter <= 3) return { ...item, short_label: `T${quarter}`, display_name: ["First Term", "Second Term", "Third Term"][quarter - 1] }
-        return item
-      }))
+    if (!periodError) setPeriods(periodData?.length ? normalizePeriods(periodData as GradingPeriodRow[], defaults.school_year) : defaultPeriodsFor(defaults.school_year))
     setLoading(false)
+  }
+  async function loadPeriods(schoolYear: string) {
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      setError(authError?.message ?? "Your session has expired. Sign in again.")
+      return
+    }
+    const { data, error: periodError } = await supabase
+      .from("grading_periods")
+      .select("quarter_number,display_name,short_label,start_date,end_date,status")
+      .eq("teacher_id", user.id)
+      .eq("school_year", schoolYear)
+      .order("quarter_number")
+    if (previousSchoolYear.current !== schoolYear) return
+    if (periodError) {
+      setError(periodError.message)
+      return
+    }
+    setPeriods(data?.length
+      ? normalizePeriods(data as GradingPeriodRow[], schoolYear)
+      : defaultPeriodsFor(schoolYear))
   }
   function update<K extends keyof Settings>(key: K, value: Settings[K]) { setSettings((current) => ({ ...current, [key]: value })); setMessage(""); setError("") }
   async function seedSampleData() {
@@ -85,7 +144,14 @@ export default function SettingsPage() {
     const activePeriods = periods.filter((period) => period.quarter_number <= 3)
     const { error: periodError } = await supabase.from("grading_periods").upsert(activePeriods.map((period) => ({ ...period, teacher_id: user.id, school_year: settings.school_year, updated_at: new Date().toISOString() })), { onConflict: "teacher_id,school_year,quarter_number" })
     if (saveError || periodError) setError(saveError?.message ?? periodError?.message ?? "Settings were not saved. Please try again.")
-    else setMessage("Settings saved successfully.")
+    else {
+      setMessage("Settings saved successfully.")
+      void mutateSWR("teacher-dashboard").catch((refreshError: unknown) => {
+        setError(refreshError instanceof Error
+          ? `Settings were saved, but the dashboard could not refresh: ${refreshError.message}`
+          : "Settings were saved, but the dashboard could not refresh.")
+      })
+    }
     setSaving(false)
   }
   if (loading) return <PageLoading message="Loading settings..." />
