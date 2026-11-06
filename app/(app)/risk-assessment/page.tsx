@@ -214,12 +214,9 @@ function performanceSummary(risk: RiskClass, gradeLevel?: number) {
 function performanceCellSummary(risk: RiskClass, gradeLevel?: number) {
 	if (gradeLevel === 0 || gradeLevel === 1) {
 		const progress = risk.competencyProgress;
-		if (!progress?.rated) return "No ratings";
-		const concernCode = gradeLevel === 0 ? "BG" : "E";
-		const developingCode = gradeLevel === 0 ? "DV" : "C/D";
-		return `${progress.rated} rated · ${concernCode} ${progress.concerning} · ${developingCode} ${progress.developing}`;
+		return progress?.rated ? `${progress.rated} ratings` : "—";
 	}
-	return risk.average === null ? "No score" : `${risk.average.toFixed(1)}%`;
+	return risk.average === null ? "—" : `${risk.average.toFixed(1)}%`;
 }
 
 export default function RiskAssessmentPage() {
@@ -683,9 +680,9 @@ export default function RiskAssessmentPage() {
 								<col className='w-[12%]' />
 								<col className='w-[18%]' />
 								<col className='w-[15%]' />
-								<col className='w-[16%]' />
+								<col className='w-[9%]' />
 								<col className='w-[12%]' />
-								<col className='w-[10%]' />
+								<col className='w-[13%]' />
 								<col className='w-[17%]' />
 							</colgroup>
 							<thead className='bg-muted/40 text-xs text-muted-foreground'>
@@ -769,7 +766,7 @@ export default function RiskAssessmentPage() {
 											</td>
 											<td className='px-5 py-4'>
 												<span
-													className={`rounded-full px-2.5 py-1 text-xs font-semibold ${badge(risk.level)}`}
+													className={`inline-block whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${badge(risk.level)}`}
 												>
 													{risk.label}
 												</span>

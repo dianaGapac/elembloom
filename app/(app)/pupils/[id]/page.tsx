@@ -176,7 +176,9 @@ async function fetchDetails(id: string) {
 			.eq("student_id", id),
 		supabase
 			.from("early_learning_reports")
-			.select("id,class_id,student_id,school_year,grading_period,what_child_can_do,learning_to_improve,teacher_comments")
+			.select(
+				"id,class_id,student_id,school_year,grading_period,what_child_can_do,learning_to_improve,teacher_comments",
+			)
 			.eq("class_id", student.class_id)
 			.eq("student_id", id),
 	]);
@@ -227,7 +229,8 @@ async function fetchDetails(id: string) {
 		offerings,
 		configurations: (configResult.data ?? []) as ClassGradingConfiguration[],
 		competencies: (competencyResult.data ?? []) as CompetencyRecord[],
-		earlyLearningReports: (earlyReportsResult.data ?? []) as EarlyLearningReport[],
+		earlyLearningReports: (earlyReportsResult.data ??
+			[]) as EarlyLearningReport[],
 	};
 }
 
@@ -662,8 +665,7 @@ export default function PupilDetails({
 				periodKeyForSchoolYear(
 					report.grading_period,
 					classRecord.school_year,
-				) ===
-					periodKeyForSchoolYear(term.key, classRecord.school_year),
+				) === periodKeyForSchoolYear(term.key, classRecord.school_year),
 		),
 	}));
 	const schoolYearStart = Number(classRecord.school_year.match(/\d{4}/)?.[0]);
@@ -683,17 +685,17 @@ export default function PupilDetails({
 		const year = schoolYearStart + yearOffset;
 		const monthRecords = Number.isFinite(year)
 			? data.attendance.filter((item) => {
-						const [recordYear, recordMonth] = item.attendance_date
-							.split("-")
-							.map(Number);
-						return recordYear === year && recordMonth === month;
-					})
+					const [recordYear, recordMonth] = item.attendance_date
+						.split("-")
+						.map(Number);
+					return recordYear === year && recordMonth === month;
+				})
 			: [];
 		return {
 			name,
 			daysRecorded: monthRecords.length,
 			present: monthRecords.filter(
-					(item) => item.status === "present" || item.status === "late",
+				(item) => item.status === "present" || item.status === "late",
 			).length,
 			absent: monthRecords.filter((item) => item.status === "absent").length,
 			excused: monthRecords.filter((item) => item.status === "excused").length,
@@ -829,9 +831,9 @@ export default function PupilDetails({
 				? "Descriptive progress and PACE ratings; no numeric grades."
 				: isKinderReport
 					? "Developmental competencies rated CO, DV, or BG; no numeric grades."
-				: isCompetencyClass
-					? "Categorical competency progress is shown. Numeric grades do not apply."
-					: "Grades use assessment scores and saved grading policies.",
+					: isCompetencyClass
+						? "Categorical competency progress is shown. Numeric grades do not apply."
+						: "Grades use assessment scores and saved grading policies.",
 			pageWidth - margin - 5,
 			53,
 			{ align: "right" },
@@ -845,9 +847,9 @@ export default function PupilDetails({
 				? "Term narratives and attendance"
 				: isKinderReport
 					? "Kinder SF9 developmental record"
-				: isCompetencyClass
-				? "Competency progress results"
-				: "Term academic results",
+					: isCompetencyClass
+						? "Competency progress results"
+						: "Term academic results",
 			margin,
 			73,
 		);
@@ -856,7 +858,12 @@ export default function PupilDetails({
 		if (classRecord.grade_level === 1) {
 			const bodyWidth = tableWidth;
 			const halfWidth = (bodyWidth - 8) / 2;
-			const drawParagraph = (text: string, fontSize: number, x: number, width: number) => {
+			const drawParagraph = (
+				text: string,
+				fontSize: number,
+				x: number,
+				width: number,
+			) => {
 				pdf.setFontSize(fontSize);
 				const lines = pdf.splitTextToSize(text, width);
 				pdf.text(lines, x, y);
@@ -998,7 +1005,11 @@ export default function PupilDetails({
 			pdf.setFont("helvetica", "normal");
 			pdf.setFontSize(8);
 			pdf.setTextColor(71, 85, 105);
-			pdf.text("Rating scale: CO — Consistent · DV — Developing · BG — Beginning", margin, y);
+			pdf.text(
+				"Rating scale: CO — Consistent · DV — Developing · BG — Beginning",
+				margin,
+				y,
+			);
 			y += 5;
 			const comments = reportNarratives;
 			if (comments.length) {
@@ -1007,7 +1018,10 @@ export default function PupilDetails({
 				pdf.text("TEACHER'S COMMENTS / REMARKS", margin, y);
 				y += 5;
 				comments.forEach(({ term, report }) => {
-					const lines = pdf.splitTextToSize(report?.teacher_comments || "No teacher comments recorded.", tableWidth - 8);
+					const lines = pdf.splitTextToSize(
+						report?.teacher_comments || "No teacher comments recorded.",
+						tableWidth - 8,
+					);
 					const blockHeight = lines.length * 4 + 9;
 					if (y + blockHeight > pageHeight - 16) {
 						pdf.addPage();
@@ -1045,11 +1059,19 @@ export default function PupilDetails({
 				pdf.rect(margin, y, tableWidth, 7, "F");
 				pdf.text("Developmental competency", margin + 2, y + 4.7);
 				terms.forEach((term, index) => {
-					pdf.text(term.quarter, margin + competencyWidth + index * ratingWidth + ratingWidth / 2, y + 4.7, { align: "center" });
+					pdf.text(
+						term.quarter,
+						margin + competencyWidth + index * ratingWidth + ratingWidth / 2,
+						y + 4.7,
+						{ align: "center" },
+					);
 				});
 				y += 7;
 			};
-			const drawDomainRows = (domainName: string, rows: Array<{ key: string; competency: string }>) => {
+			const drawDomainRows = (
+				domainName: string,
+				rows: Array<{ key: string; competency: string }>,
+			) => {
 				drawDomainHeader(domainName);
 				rows.forEach(({ key, competency }) => {
 					const lines = pdf.splitTextToSize(competency, competencyWidth - 4);
@@ -1066,27 +1088,38 @@ export default function PupilDetails({
 					pdf.setTextColor(51, 65, 85);
 					pdf.text(lines, margin + 2, y + 4.5);
 					terms.forEach((term, index) => {
-						const record = reportProgressRows.find((item) =>
-							item.competency === key &&
-							periodKeyForSchoolYear(item.grading_period, classRecord.school_year) ===
-								periodKeyForSchoolYear(term.key, classRecord.school_year),
+						const record = reportProgressRows.find(
+							(item) =>
+								item.competency === key &&
+								periodKeyForSchoolYear(
+									item.grading_period,
+									classRecord.school_year,
+								) === periodKeyForSchoolYear(term.key, classRecord.school_year),
 						);
 						const cellX = margin + competencyWidth + index * ratingWidth;
 						pdf.line(cellX, y, cellX, y + rowHeight);
 						pdf.setFont("helvetica", "bold");
-						pdf.text(record?.rating ?? "—", cellX + ratingWidth / 2, y + 4.7, { align: "center" });
+						pdf.text(record?.rating ?? "—", cellX + ratingWidth / 2, y + 4.7, {
+							align: "center",
+						});
 					});
 					y += rowHeight;
 				});
 			};
 			const catalog = kinderCompetencyList();
 			kinderCompetencyDomains.forEach((domain) => {
-				drawDomainRows(domain.name, catalog.filter((item) => item.domain === domain.name));
+				drawDomainRows(
+					domain.name,
+					catalog.filter((item) => item.domain === domain.name),
+				);
 			});
-			const legacyCompetencies = [...new Set(reportProgressRows.map((item) => item.competency))]
+			const legacyCompetencies = [
+				...new Set(reportProgressRows.map((item) => item.competency)),
+			]
 				.filter((name) => !catalog.some((item) => item.key === name))
 				.map((key) => ({ key, competency: key }));
-			if (legacyCompetencies.length) drawDomainRows("Previously entered competencies", legacyCompetencies);
+			if (legacyCompetencies.length)
+				drawDomainRows("Previously entered competencies", legacyCompetencies);
 
 			if (y + 52 > pageHeight - 15) {
 				pdf.addPage();
@@ -1098,7 +1131,13 @@ export default function PupilDetails({
 			pdf.text("ATTENDANCE RECORD", margin, y);
 			y += 5;
 			const attendanceWidths = [45, 37, 37, 37, tableWidth - 156];
-			const attendanceHeaders = ["Month", "Days recorded", "Present", "Absent", "Excused"];
+			const attendanceHeaders = [
+				"Month",
+				"Days recorded",
+				"Present",
+				"Absent",
+				"Excused",
+			];
 			const drawAttendanceHeader = () => {
 				pdf.setFillColor(232, 245, 236);
 				pdf.rect(margin, y, tableWidth, 7, "F");
@@ -1121,7 +1160,13 @@ export default function PupilDetails({
 					drawAttendanceHeader();
 				}
 				let x = margin;
-				const values = [month.name, String(month.daysRecorded || "—"), String(month.daysRecorded ? month.present : "—"), String(month.daysRecorded ? month.absent : "—"), String(month.daysRecorded ? month.excused : "—")];
+				const values = [
+					month.name,
+					String(month.daysRecorded || "—"),
+					String(month.daysRecorded ? month.present : "—"),
+					String(month.daysRecorded ? month.absent : "—"),
+					String(month.daysRecorded ? month.excused : "—"),
+				];
 				values.forEach((value, index) => {
 					pdf.text(value, x + 2, y + 4.7);
 					x += attendanceWidths[index];
@@ -1131,11 +1176,19 @@ export default function PupilDetails({
 				y += 6;
 			});
 			pdf.setFont("helvetica", "bold");
-			pdf.text(`TOTAL · ${kinderAttendanceTotals.daysRecorded} days recorded · ${kinderAttendanceTotals.present} present · ${kinderAttendanceTotals.absent} absent · ${kinderAttendanceTotals.excused} excused`, margin, y + 5);
+			pdf.text(
+				`TOTAL · ${kinderAttendanceTotals.daysRecorded} days recorded · ${kinderAttendanceTotals.present} present · ${kinderAttendanceTotals.absent} absent · ${kinderAttendanceTotals.excused} excused`,
+				margin,
+				y + 5,
+			);
 			y += 10;
 			pdf.setFont("helvetica", "italic");
 			pdf.setFontSize(7);
-			pdf.text("Attendance values are based on saved pupil attendance entries only; they do not represent scheduled class days.", margin, y);
+			pdf.text(
+				"Attendance values are based on saved pupil attendance entries only; they do not represent scheduled class days.",
+				margin,
+				y,
+			);
 		} else if (isCompetencyClass) {
 			pdf.setFont("helvetica", "bold");
 			pdf.setFontSize(10);
@@ -1303,7 +1356,7 @@ export default function PupilDetails({
 		try {
 			const pdf = await buildReportPdf();
 			pdf.save(
-			`${student.last_name}-${classRecord.grade_level === 1 ? "Grade-1-SF9" : classRecord.grade_level === 0 ? "Kinder-SF9" : reportSubject || "subject"}-report-card.pdf`,
+				`${student.last_name}-${classRecord.grade_level === 1 ? "Grade-1-SF9" : classRecord.grade_level === 0 ? "Kinder-SF9" : reportSubject || "subject"}-report-card.pdf`,
 			);
 		} catch (pdfError) {
 			setReportSendError(
@@ -1335,7 +1388,11 @@ export default function PupilDetails({
 				throw new Error("The report card PDF could not be generated.");
 			const scope = reportPeriod === "Full Year" ? "Full Year" : reportPeriod;
 			const reportLabel =
-				classRecord.grade_level === 1 ? "Grade-1-SF9" : classRecord.grade_level === 0 ? "Kinder-SF9" : reportSubject;
+				classRecord.grade_level === 1
+					? "Grade-1-SF9"
+					: classRecord.grade_level === 0
+						? "Kinder-SF9"
+						: reportSubject;
 			const fileName =
 				`${student.last_name}-${reportLabel}-${scope}-report-card.pdf`.replace(
 					/[^a-zA-Z0-9._-]/g,
@@ -1663,36 +1720,38 @@ export default function PupilDetails({
 							Average score by subject from recorded assessments.
 						</p>
 					</div>
-					<div className='grid gap-5 p-5 lg:grid-cols-2'>
-					{subjectAverages.length ? (
-						<div className='flex flex-col gap-5'>
-							{subjectAverages.map((item) => (
-								<div key={item.name}>
-									<div className='mb-2 flex justify-between text-sm'>
-										<span className='font-medium'>{item.name}</span>
-										<span className='text-muted-foreground'>{item.value}%</span>
+					<div className='grid gap-5 p-5 lg:grid-rows-2'>
+						<TrendChart
+							title='Performance trend'
+							points={performanceTrend}
+							emptyMessage='No scored assessments match the selected subject and term.'
+							caption='Assessment score (%) · hover over a point for the activity name'
+							compact
+						/>
+						{subjectAverages.length ? (
+							<div className='flex flex-col gap-5'>
+								{subjectAverages.map((item) => (
+									<div key={item.name}>
+										<div className='mb-2 flex justify-between text-sm'>
+											<span className='font-medium'>{item.name}</span>
+											<span className='text-muted-foreground'>
+												{item.value}%
+											</span>
+										</div>
+										<div className='h-3 overflow-hidden rounded-full bg-muted'>
+											<div
+												className='h-full rounded-full bg-primary transition-all'
+												style={{ width: `${item.value}%` }}
+											/>
+										</div>
 									</div>
-									<div className='h-3 overflow-hidden rounded-full bg-muted'>
-										<div
-											className='h-full rounded-full bg-primary transition-all'
-											style={{ width: `${item.value}%` }}
-										/>
-									</div>
-								</div>
-							))}
-						</div>
-					) : (
-						<div className='p-6 text-center text-sm text-muted-foreground'>
-							No academic scores available
-						</div>
-					)}
-					<TrendChart
-						title="Performance trend"
-						points={performanceTrend}
-						emptyMessage="No scored assessments match the selected subject and term."
-						caption="Assessment score (%) · hover over a point for the activity name"
-						compact
-					/>
+								))}
+							</div>
+						) : (
+							<div className='p-6 text-center text-sm text-muted-foreground'>
+								No academic scores available
+							</div>
+						)}
 					</div>
 				</div>
 			</div>
@@ -1814,10 +1873,7 @@ export default function PupilDetails({
 								<Button
 									type='button'
 									onClick={sendReportCard}
-									disabled={
-										sendingReport ||
-										!student.parent_guardian_email
-									}
+									disabled={sendingReport || !student.parent_guardian_email}
 								>
 									<Mail data-icon='inline-start' />
 									{sendingReport ? "Sending…" : "Send to parent/guardian"}
@@ -1832,23 +1888,25 @@ export default function PupilDetails({
 							</div>
 						</div>
 						<div className='mt-5 grid gap-3 sm:grid-cols-3'>
-							{classRecord.grade_level !== 1 && <label className='text-sm font-medium'>
-								Subject
-								<select
-									disabled={sendingReport}
-									className='mt-2 w-full rounded-lg border bg-background px-3 py-2'
-									value={reportSubject}
-									onChange={(event) => {
-										setReportSubject(event.target.value);
-										setReportSendError("");
-										setReportSendMessage("");
-									}}
-								>
-									{subjects.map((item) => (
-										<option key={item}>{item}</option>
-									))}
-								</select>
-							</label>}
+							{classRecord.grade_level !== 1 && (
+								<label className='text-sm font-medium'>
+									Subject
+									<select
+										disabled={sendingReport}
+										className='mt-2 w-full rounded-lg border bg-background px-3 py-2'
+										value={reportSubject}
+										onChange={(event) => {
+											setReportSubject(event.target.value);
+											setReportSendError("");
+											setReportSendMessage("");
+										}}
+									>
+										{subjects.map((item) => (
+											<option key={item}>{item}</option>
+										))}
+									</select>
+								</label>
+							)}
 							<label className='text-sm font-medium'>
 								{classRecord.grade_level === 1 ? "Report scope" : "Scope"}
 								<select
@@ -1867,16 +1925,18 @@ export default function PupilDetails({
 									))}
 								</select>
 							</label>
-							{!isCompetencyClass && <label className='text-sm font-medium'>
-								Passing Grade:
-								<div className='rounded-lg border bg-muted/30 p-3 text-sm text-center'>
-									<strong>
-										{passingGradeLabels.length
-											? passingGradeLabels.join(" / ")
-											: "Not configured"}
-									</strong>
-								</div>
-							</label>}
+							{!isCompetencyClass && (
+								<label className='text-sm font-medium'>
+									Passing Grade:
+									<div className='rounded-lg border bg-muted/30 p-3 text-sm text-center'>
+										<strong>
+											{passingGradeLabels.length
+												? passingGradeLabels.join(" / ")
+												: "Not configured"}
+										</strong>
+									</div>
+								</label>
+							)}
 						</div>
 						{!isCompetencyClass && !reportHasSettings && (
 							<p className='mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700'>
@@ -1890,7 +1950,7 @@ export default function PupilDetails({
 								? "Grade 1 progress is descriptive and competency-based; numeric and letter grades are not used as subject grades."
 								: classRecord.grade_level === 0
 									? "Kinder progress is recorded by developmental competency using CO, DV, and BG. Numeric grades do not apply."
-								: "Academic results are based on the latest E-Class Records provided and released by DepEd."}
+									: "Academic results are based on the latest E-Class Records provided and released by DepEd."}
 						</p>
 						{!student.parent_guardian_email && (
 							<p className='mt-4 rounded-lg border border-muted bg-muted/40 p-3 text-sm text-muted-foreground'>
@@ -1927,35 +1987,86 @@ export default function PupilDetails({
 										School Year {classRecord.school_year}
 									</p>
 									<div className='mt-5 grid gap-3 rounded-lg border bg-card p-4 sm:grid-cols-2'>
-										<p><span className='text-muted-foreground'>Name:</span> <strong>{student.last_name}, {student.first_name}</strong></p>
-										<p><span className='text-muted-foreground'>LRN / Student no.:</span> <strong>{student.student_number}</strong></p>
-										<p><span className='text-muted-foreground'>Grade / Section:</span> <strong>Grade 1 · {classRecord.section_name}</strong></p>
-										<p><span className='text-muted-foreground'>Parent / Guardian:</span> <strong>{student.parent_guardian_name || "—"}</strong></p>
+										<p>
+											<span className='text-muted-foreground'>Name:</span>{" "}
+											<strong>
+												{student.last_name}, {student.first_name}
+											</strong>
+										</p>
+										<p>
+											<span className='text-muted-foreground'>
+												LRN / Student no.:
+											</span>{" "}
+											<strong>{student.student_number}</strong>
+										</p>
+										<p>
+											<span className='text-muted-foreground'>
+												Grade / Section:
+											</span>{" "}
+											<strong>Grade 1 · {classRecord.section_name}</strong>
+										</p>
+										<p>
+											<span className='text-muted-foreground'>
+												Parent / Guardian:
+											</span>{" "}
+											<strong>{student.parent_guardian_name || "—"}</strong>
+										</p>
 									</div>
 									<p className='mt-4 text-sm leading-6 text-muted-foreground'>
-										This report provides a descriptive account of your child&apos;s learning progress for each term. It highlights what your child can already do, what they are currently developing, and how they can be further supported.
+										This report provides a descriptive account of your
+										child&apos;s learning progress for each term. It highlights
+										what your child can already do, what they are currently
+										developing, and how they can be further supported.
 									</p>
 									<p className='mt-2 text-sm leading-6 text-muted-foreground'>
-										This report is based on varied evidence of learning, including classroom activities, observations, learner outputs, and assessments. It is designed to give a clearer understanding of your child&apos;s development rather than relying on numerical or letter grades.
+										This report is based on varied evidence of learning,
+										including classroom activities, observations, learner
+										outputs, and assessments. It is designed to give a clearer
+										understanding of your child&apos;s development rather than
+										relying on numerical or letter grades.
 									</p>
 								</section>
 
 								<section className='space-y-3'>
 									<h3 className='font-semibold'>Term narratives</h3>
 									{reportNarratives.map(({ term, report }) => (
-										<article key={term} className='overflow-hidden rounded-xl border'>
-											<h4 className='bg-primary/10 px-4 py-3 text-sm font-bold uppercase tracking-wide'>{term}</h4>
+										<article
+											key={term}
+											className='overflow-hidden rounded-xl border'
+										>
+											<h4 className='bg-primary/10 px-4 py-3 text-sm font-bold uppercase tracking-wide'>
+												{term}
+											</h4>
 											<div className='grid md:grid-cols-2'>
 												<div className='border-b p-4 md:border-b-0 md:border-r'>
-													<h5 className='text-sm font-semibold'>What Your Child Can Do <span className='font-normal text-muted-foreground'>(Mga Nagagawa)</span></h5>
-													<p className='mt-2 min-h-16 whitespace-pre-wrap text-sm leading-6 text-muted-foreground'>{report?.what_child_can_do || "No term narrative recorded."}</p>
+													<h5 className='text-sm font-semibold'>
+														What Your Child Can Do{" "}
+														<span className='font-normal text-muted-foreground'>
+															(Mga Nagagawa)
+														</span>
+													</h5>
+													<p className='mt-2 min-h-16 whitespace-pre-wrap text-sm leading-6 text-muted-foreground'>
+														{report?.what_child_can_do ||
+															"No term narrative recorded."}
+													</p>
 												</div>
 												<div className='p-4'>
-													<h5 className='text-sm font-semibold'>What Your Child Is Learning To Improve <span className='font-normal text-muted-foreground'>(Dapat Linangin)</span></h5>
-													<p className='mt-2 min-h-16 whitespace-pre-wrap text-sm leading-6 text-muted-foreground'>{report?.learning_to_improve || "No term narrative recorded."}</p>
+													<h5 className='text-sm font-semibold'>
+														What Your Child Is Learning To Improve{" "}
+														<span className='font-normal text-muted-foreground'>
+															(Dapat Linangin)
+														</span>
+													</h5>
+													<p className='mt-2 min-h-16 whitespace-pre-wrap text-sm leading-6 text-muted-foreground'>
+														{report?.learning_to_improve ||
+															"No term narrative recorded."}
+													</p>
 												</div>
 											</div>
-											<div className='border-t px-4 py-3 text-right text-xs text-muted-foreground'>Parent&apos;s / Guardian&apos;s Signature: ______________________________</div>
+											<div className='border-t px-4 py-3 text-right text-xs text-muted-foreground'>
+												Parent&apos;s / Guardian&apos;s Signature:
+												______________________________
+											</div>
 										</article>
 									))}
 								</section>
@@ -1963,19 +2074,57 @@ export default function PupilDetails({
 								<section className='overflow-hidden rounded-xl border'>
 									<div className='border-b p-4'>
 										<h3 className='font-semibold'>Attendance record</h3>
-										<p className='mt-1 text-xs text-muted-foreground'>Days recorded are based on saved attendance entries. Present includes late arrivals; excused entries are excluded from present and absent totals.</p>
+										<p className='mt-1 text-xs text-muted-foreground'>
+											Days recorded are based on saved attendance entries.
+											Present includes late arrivals; excused entries are
+											excluded from present and absent totals.
+										</p>
 									</div>
 									<div className='overflow-x-auto'>
 										<table className='w-full min-w-[560px] text-left text-sm'>
-											<thead className='bg-muted/40 text-xs uppercase text-muted-foreground'><tr><th className='px-4 py-3'>Month</th><th className='px-4 py-3'>Days recorded</th><th className='px-4 py-3'>Days present</th><th className='px-4 py-3'>Times absent</th></tr></thead>
+											<thead className='bg-muted/40 text-xs uppercase text-muted-foreground'>
+												<tr>
+													<th className='px-4 py-3'>Month</th>
+													<th className='px-4 py-3'>Days recorded</th>
+													<th className='px-4 py-3'>Days present</th>
+													<th className='px-4 py-3'>Times absent</th>
+												</tr>
+											</thead>
 											<tbody className='divide-y'>
-												{gradeOneAttendanceMonths.map((month) => <tr key={month.name}><td className='px-4 py-2.5 font-medium'>{month.name}</td><td className='px-4 py-2.5'>{month.daysRecorded || "—"}</td><td className='px-4 py-2.5'>{month.daysRecorded ? month.present : "—"}</td><td className='px-4 py-2.5'>{month.daysRecorded ? month.absent : "—"}</td></tr>)}
+												{gradeOneAttendanceMonths.map((month) => (
+													<tr key={month.name}>
+														<td className='px-4 py-2.5 font-medium'>
+															{month.name}
+														</td>
+														<td className='px-4 py-2.5'>
+															{month.daysRecorded || "—"}
+														</td>
+														<td className='px-4 py-2.5'>
+															{month.daysRecorded ? month.present : "—"}
+														</td>
+														<td className='px-4 py-2.5'>
+															{month.daysRecorded ? month.absent : "—"}
+														</td>
+													</tr>
+												))}
 											</tbody>
-											<tfoot className='border-t bg-muted/20 font-semibold'><tr><td className='px-4 py-3'>Total</td><td className='px-4 py-3'>{gradeOneAttendanceTotals.daysRecorded}</td><td className='px-4 py-3'>{gradeOneAttendanceTotals.present}</td><td className='px-4 py-3'>{gradeOneAttendanceTotals.absent}</td></tr></tfoot>
+											<tfoot className='border-t bg-muted/20 font-semibold'>
+												<tr>
+													<td className='px-4 py-3'>Total</td>
+													<td className='px-4 py-3'>
+														{gradeOneAttendanceTotals.daysRecorded}
+													</td>
+													<td className='px-4 py-3'>
+														{gradeOneAttendanceTotals.present}
+													</td>
+													<td className='px-4 py-3'>
+														{gradeOneAttendanceTotals.absent}
+													</td>
+												</tr>
+											</tfoot>
 										</table>
 									</div>
 								</section>
-
 							</div>
 						)}
 						{!isCompetencyClass && reportSubject && (
@@ -2054,67 +2203,228 @@ export default function PupilDetails({
 							<div className='mt-6 space-y-6'>
 								<section className='space-y-3'>
 									<div>
-										<h3 className='font-semibold'>Teacher&apos;s comments / remarks</h3>
-										<p className='text-xs text-muted-foreground'>Comments saved for each term in the selected report scope.</p>
+										<h3 className='font-semibold'>
+											Teacher&apos;s comments / remarks
+										</h3>
+										<p className='text-xs text-muted-foreground'>
+											Comments saved for each term in the selected report scope.
+										</p>
 									</div>
 									{reportNarratives.map(({ term, report }) => (
 										<article key={term} className='rounded-lg border'>
-											<h4 className='bg-muted/30 px-4 py-2 text-sm font-semibold'>{term}</h4>
-											<p className='min-h-12 whitespace-pre-wrap px-4 py-3 text-sm text-muted-foreground'>{report?.teacher_comments || "No teacher comments recorded for this term."}</p>
+											<h4 className='bg-muted/30 px-4 py-2 text-sm font-semibold'>
+												{term}
+											</h4>
+											<p className='min-h-12 whitespace-pre-wrap px-4 py-3 text-sm text-muted-foreground'>
+												{report?.teacher_comments ||
+													"No teacher comments recorded for this term."}
+											</p>
 										</article>
 									))}
 								</section>
 								<section className='space-y-3'>
 									<div>
-										<h3 className='font-semibold'>Developmental competencies</h3>
-										<p className='text-xs text-muted-foreground'>Rating scale: CO — Consistent · DV — Developing · BG — Beginning. Unrecorded competencies are shown as —.</p>
+										<h3 className='font-semibold'>
+											Developmental competencies
+										</h3>
+										<p className='text-xs text-muted-foreground'>
+											Rating scale: CO — Consistent · DV — Developing · BG —
+											Beginning. Unrecorded competencies are shown as —.
+										</p>
 									</div>
 									<div className='space-y-4'>
 										{kinderCompetencyDomains.map((domain) => {
-											const domainItems = kinderCompetencyList().filter((item) => item.domain === domain.name);
-											return <div key={domain.name} className='overflow-x-auto rounded-lg border'>
-												<h4 className='bg-muted/30 px-4 py-2 text-sm font-semibold'>{domain.name}</h4>
-												<table className='w-full min-w-[640px] text-left text-sm'>
-													<thead className='bg-muted/10 text-xs text-muted-foreground'><tr><th className='w-12 px-3 py-2 text-center'>No.</th><th className='px-3 py-2'>Developmental competency</th>{selectedReportRows.map((term) => <th key={term.key} className='w-24 px-3 py-2 text-center'>{term.quarter}</th>)}</tr></thead>
-													<tbody className='divide-y'>
-														{domainItems.map((item, index) => <tr key={item.key}>
-															<td className='px-3 py-2 text-center text-muted-foreground'>{index + 1}</td>
-															<td className='px-3 py-2'>{item.competency}</td>
-															{selectedReportRows.map((term) => {
-																const rating = reportProgressRows.find((record) =>
-																	record.competency === kinderCompetencyKey(domain.name, item.competency) &&
-																	periodKeyForSchoolYear(record.grading_period, classRecord.school_year) === periodKeyForSchoolYear(term.key, classRecord.school_year),
-																)?.rating;
-																return <td key={term.key} className='px-3 py-2 text-center font-semibold'>{rating || "—"}</td>;
-															})}
-														</tr>)}
-													</tbody>
-												</table>
-											</div>;
+											const domainItems = kinderCompetencyList().filter(
+												(item) => item.domain === domain.name,
+											);
+											return (
+												<div
+													key={domain.name}
+													className='overflow-x-auto rounded-lg border'
+												>
+													<h4 className='bg-muted/30 px-4 py-2 text-sm font-semibold'>
+														{domain.name}
+													</h4>
+													<table className='w-full min-w-[640px] text-left text-sm'>
+														<thead className='bg-muted/10 text-xs text-muted-foreground'>
+															<tr>
+																<th className='w-12 px-3 py-2 text-center'>
+																	No.
+																</th>
+																<th className='px-3 py-2'>
+																	Developmental competency
+																</th>
+																{selectedReportRows.map((term) => (
+																	<th
+																		key={term.key}
+																		className='w-24 px-3 py-2 text-center'
+																	>
+																		{term.quarter}
+																	</th>
+																))}
+															</tr>
+														</thead>
+														<tbody className='divide-y'>
+															{domainItems.map((item, index) => (
+																<tr key={item.key}>
+																	<td className='px-3 py-2 text-center text-muted-foreground'>
+																		{index + 1}
+																	</td>
+																	<td className='px-3 py-2'>
+																		{item.competency}
+																	</td>
+																	{selectedReportRows.map((term) => {
+																		const rating = reportProgressRows.find(
+																			(record) =>
+																				record.competency ===
+																					kinderCompetencyKey(
+																						domain.name,
+																						item.competency,
+																					) &&
+																				periodKeyForSchoolYear(
+																					record.grading_period,
+																					classRecord.school_year,
+																				) ===
+																					periodKeyForSchoolYear(
+																						term.key,
+																						classRecord.school_year,
+																					),
+																		)?.rating;
+																		return (
+																			<td
+																				key={term.key}
+																				className='px-3 py-2 text-center font-semibold'
+																			>
+																				{rating || "—"}
+																			</td>
+																		);
+																	})}
+																</tr>
+															))}
+														</tbody>
+													</table>
+												</div>
+											);
 										})}
 										{(() => {
 											const catalog = kinderCompetencyList();
-											const legacy = [...new Set(reportProgressRows.map((record) => record.competency))].filter((name) => !catalog.some((item) => item.key === name));
-											return legacy.length ? <div className='overflow-x-auto rounded-lg border'>
-												<h4 className='bg-muted/30 px-4 py-2 text-sm font-semibold'>Previously entered competencies</h4>
-												<table className='w-full min-w-[640px] text-left text-sm'>
-													<thead className='bg-muted/10 text-xs text-muted-foreground'><tr><th className='px-3 py-2'>Developmental competency</th>{selectedReportRows.map((term) => <th key={term.key} className='w-24 px-3 py-2 text-center'>{term.quarter}</th>)}</tr></thead>
-													<tbody className='divide-y'>{legacy.map((name) => <tr key={name}><td className='px-3 py-2'>{name}</td>{selectedReportRows.map((term) => <td key={term.key} className='px-3 py-2 text-center font-semibold'>{reportProgressRows.find((record) => record.competency === name && periodKeyForSchoolYear(record.grading_period, classRecord.school_year) === periodKeyForSchoolYear(term.key, classRecord.school_year))?.rating ?? "—"}</td>)}</tr>)}</tbody>
-												</table>
-											</div> : null;
+											const legacy = [
+												...new Set(
+													reportProgressRows.map((record) => record.competency),
+												),
+											].filter(
+												(name) => !catalog.some((item) => item.key === name),
+											);
+											return legacy.length ? (
+												<div className='overflow-x-auto rounded-lg border'>
+													<h4 className='bg-muted/30 px-4 py-2 text-sm font-semibold'>
+														Previously entered competencies
+													</h4>
+													<table className='w-full min-w-[640px] text-left text-sm'>
+														<thead className='bg-muted/10 text-xs text-muted-foreground'>
+															<tr>
+																<th className='px-3 py-2'>
+																	Developmental competency
+																</th>
+																{selectedReportRows.map((term) => (
+																	<th
+																		key={term.key}
+																		className='w-24 px-3 py-2 text-center'
+																	>
+																		{term.quarter}
+																	</th>
+																))}
+															</tr>
+														</thead>
+														<tbody className='divide-y'>
+															{legacy.map((name) => (
+																<tr key={name}>
+																	<td className='px-3 py-2'>{name}</td>
+																	{selectedReportRows.map((term) => (
+																		<td
+																			key={term.key}
+																			className='px-3 py-2 text-center font-semibold'
+																		>
+																			{reportProgressRows.find(
+																				(record) =>
+																					record.competency === name &&
+																					periodKeyForSchoolYear(
+																						record.grading_period,
+																						classRecord.school_year,
+																					) ===
+																						periodKeyForSchoolYear(
+																							term.key,
+																							classRecord.school_year,
+																						),
+																			)?.rating ?? "—"}
+																		</td>
+																	))}
+																</tr>
+															))}
+														</tbody>
+													</table>
+												</div>
+											) : null;
 										})()}
 									</div>
 								</section>
 								<section className='overflow-hidden rounded-xl border'>
 									<div className='border-b p-4'>
 										<h3 className='font-semibold'>Attendance record</h3>
-										<p className='mt-1 text-xs text-muted-foreground'>Attendance is based on saved pupil attendance entries only; it does not represent scheduled class days.</p>
+										<p className='mt-1 text-xs text-muted-foreground'>
+											Attendance is based on saved pupil attendance entries
+											only; it does not represent scheduled class days.
+										</p>
 									</div>
 									<div className='overflow-x-auto'>
 										<table className='w-full min-w-[640px] text-left text-sm'>
-											<thead className='bg-muted/40 text-xs uppercase text-muted-foreground'><tr><th className='px-4 py-3'>Month</th><th className='px-4 py-3'>Days recorded</th><th className='px-4 py-3'>Present</th><th className='px-4 py-3'>Absent</th><th className='px-4 py-3'>Excused</th></tr></thead>
-											<tbody className='divide-y'>{gradeOneAttendanceMonths.map((month) => <tr key={month.name}><td className='px-4 py-2.5 font-medium'>{month.name}</td><td className='px-4 py-2.5'>{month.daysRecorded || "—"}</td><td className='px-4 py-2.5'>{month.daysRecorded ? month.present : "—"}</td><td className='px-4 py-2.5'>{month.daysRecorded ? month.absent : "—"}</td><td className='px-4 py-2.5'>{month.daysRecorded ? month.excused : "—"}</td></tr>)}</tbody>
-											<tfoot className='border-t bg-muted/20 font-semibold'><tr><td className='px-4 py-3'>Total recorded</td><td className='px-4 py-3'>{kinderAttendanceTotals.daysRecorded}</td><td className='px-4 py-3'>{kinderAttendanceTotals.present}</td><td className='px-4 py-3'>{kinderAttendanceTotals.absent}</td><td className='px-4 py-3'>{kinderAttendanceTotals.excused}</td></tr></tfoot>
+											<thead className='bg-muted/40 text-xs uppercase text-muted-foreground'>
+												<tr>
+													<th className='px-4 py-3'>Month</th>
+													<th className='px-4 py-3'>Days recorded</th>
+													<th className='px-4 py-3'>Present</th>
+													<th className='px-4 py-3'>Absent</th>
+													<th className='px-4 py-3'>Excused</th>
+												</tr>
+											</thead>
+											<tbody className='divide-y'>
+												{gradeOneAttendanceMonths.map((month) => (
+													<tr key={month.name}>
+														<td className='px-4 py-2.5 font-medium'>
+															{month.name}
+														</td>
+														<td className='px-4 py-2.5'>
+															{month.daysRecorded || "—"}
+														</td>
+														<td className='px-4 py-2.5'>
+															{month.daysRecorded ? month.present : "—"}
+														</td>
+														<td className='px-4 py-2.5'>
+															{month.daysRecorded ? month.absent : "—"}
+														</td>
+														<td className='px-4 py-2.5'>
+															{month.daysRecorded ? month.excused : "—"}
+														</td>
+													</tr>
+												))}
+											</tbody>
+											<tfoot className='border-t bg-muted/20 font-semibold'>
+												<tr>
+													<td className='px-4 py-3'>Total recorded</td>
+													<td className='px-4 py-3'>
+														{kinderAttendanceTotals.daysRecorded}
+													</td>
+													<td className='px-4 py-3'>
+														{kinderAttendanceTotals.present}
+													</td>
+													<td className='px-4 py-3'>
+														{kinderAttendanceTotals.absent}
+													</td>
+													<td className='px-4 py-3'>
+														{kinderAttendanceTotals.excused}
+													</td>
+												</tr>
+											</tfoot>
 										</table>
 									</div>
 								</section>
