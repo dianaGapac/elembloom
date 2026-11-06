@@ -175,7 +175,7 @@ export default function ClassWorkspacePage() {
           <PupilGenderFilter value={genderFilter} onChange={setGenderFilter} />
         </div>
       </div>
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid min-w-0 gap-4 lg:grid-cols-2">
         <div className="rounded-xl border bg-card p-5"><h3 className="font-semibold">Enrolled pupils ({pupils.length})</h3><div className="mt-3 divide-y">{pupils.map((student) => <div key={student.id} className="flex items-center justify-between py-3"><div><p className="font-medium">{student.last_name}, {student.first_name}</p><p className="text-xs capitalize text-muted-foreground">{student.student_number} · {student.gender ?? "Gender not set"}</p></div><Button variant="ghost" size="sm" onClick={() => void setEnrollment(student.id, false)}>Remove</Button></div>)}</div></div>
         <div className="rounded-xl border bg-card p-5"><h3 className="font-semibold">Available pupils</h3><div className="mt-3 divide-y">{available.slice(0, 20).map((student) => <div key={student.id} className="flex items-center justify-between py-3"><div><p className="font-medium">{student.last_name}, {student.first_name}</p><p className="text-xs capitalize text-muted-foreground">{student.student_number} · {student.gender ?? "Gender not set"}</p></div><Button variant="outline" size="sm" onClick={() => void setEnrollment(student.id, true)}>Enroll</Button></div>)}</div></div>
       </div>

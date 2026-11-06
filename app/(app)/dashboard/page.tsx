@@ -233,7 +233,7 @@ export default function DashboardPage() {
     {dirty && <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-200" role="status">You have unsaved attendance changes. Save before leaving this page.</div>}
     <div><p className="text-sm font-medium text-primary">{formatDate(today)}</p><h1 className="mt-1 text-3xl font-bold tracking-tight">Good Day, {data?.profile?.full_name?.split(" ")[0] || "Teacher"}</h1><p className="mt-2 text-muted-foreground">Your daily workspace for pupil progress and timely support.</p></div>
     <div className="rounded-xl border bg-card p-5"><div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-center"><div><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Current academic term</p><h2 className="mt-1 text-xl font-semibold">{activeTerm ? `${periodLabelForSchoolYear(activeTerm.short_label, activeTerm.school_year)} · ${activeTerm.school_year}` : "Term dates not configured for the current date"}</h2><p className="mt-1 text-sm text-muted-foreground">{activeTerm ? `${formatDate(activeTerm.start_date)} – ${formatDate(activeTerm.end_date)}` : "Set term start and end dates in Settings → Terms."}</p></div>{activeTerm && <p className="rounded-lg bg-primary/10 px-4 py-3 text-sm font-medium text-primary">{daysUntilTermEnd === 0 ? "Term ends today" : `${daysUntilTermEnd} day${daysUntilTermEnd === 1 ? "" : "s"} until term ends`}</p>}</div></div>
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+    <div className="grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-5">
       <Link href="/pupils" className="rounded-xl border border-primary/20 bg-primary/5 p-5 transition hover:border-primary"><Users className="text-primary" /><p className="mt-4 text-sm font-medium text-muted-foreground">Active Pupils</p><p className="mt-1 text-3xl font-bold text-foreground">{students.length}</p></Link>
       <Link href="/risk-assessment" className={`rounded-xl border p-5 transition hover:border-destructive ${highRiskStudentCount ? "border-destructive/30 bg-destructive/5" : "bg-card"}`}><AlertCircle className="text-destructive" /><p className="mt-4 text-sm font-medium text-muted-foreground">High risk students</p><p className="mt-1 text-3xl font-bold text-destructive">{highRiskStudentCount}</p></Link>
       <Link href="/interventions?status=active" className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-5 transition hover:border-emerald-600"><HeartPulse className="text-emerald-700" /><p className="mt-4 text-sm font-medium text-muted-foreground">Active interventions</p><p className="mt-1 text-3xl font-bold text-emerald-800">{activeInterventionPlans.length}</p></Link>
@@ -247,7 +247,7 @@ export default function DashboardPage() {
           {selectedClassRecord ? `Recent attendance and assessment trends for ${gradeLevelLabel(selectedClassRecord.grade_level)} – ${selectedClassRecord.section_name}.` : "Select a class to view its attendance and assessment trends."}
         </p>
       </div>
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid min-w-0 gap-4 lg:grid-cols-2">
         <TrendChart
           title="Weekly attendance rate"
           points={trendData.attendance}

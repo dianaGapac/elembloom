@@ -507,7 +507,7 @@ export default function RiskAssessmentPage() {
 					attendance and grade-appropriate learning records.
 				</p>
 			</div>
-			<div className='grid gap-4 lg:grid-cols-[2fr_1fr]'>
+			<div className='grid min-w-0 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]'>
 				<TrendChart
 					title={showCompetencyTrend ? "Competency ratings needing support" : "Assessment performance trend"}
 					points={performanceTrend}

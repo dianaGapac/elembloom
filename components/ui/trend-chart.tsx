@@ -35,12 +35,12 @@ export function TrendChart({
 	const path = coordinates.map((point, index) => `${index ? "L" : "M"} ${point.x} ${point.y}`).join(" ");
 
 	return (
-		<section className='rounded-xl border bg-card p-4'>
-			<h3 className='font-semibold'>{title}</h3>
+		<section className='min-w-0 overflow-hidden rounded-xl border bg-card p-4'>
+			<h3 className='break-words font-semibold'>{title}</h3>
 			{coordinates.length ? (
-				<div className='mt-3'>
+				<div className='mt-3 min-w-0'>
 					<svg
-						className='h-auto w-full overflow-visible'
+						className='block h-auto w-full'
 						viewBox={`0 0 ${width} ${height}`}
 						role='img'
 						aria-label={`${title}: ${coordinates.map((point) => `${point.tooltip ?? point.label} ${point.value.toFixed(1)}${valueSuffix}`).join(", ")}`}
@@ -68,7 +68,7 @@ export function TrendChart({
 							</text>
 						))}
 					</svg>
-					<p className='text-xs text-muted-foreground'>{caption} · most recent {coordinates.length} records</p>
+					<p className='mt-1 break-words text-xs text-muted-foreground'>{caption} · most recent {coordinates.length} records</p>
 				</div>
 			) : (
 				<p className='mt-3 rounded-lg bg-muted/30 p-4 text-sm text-muted-foreground'>{emptyMessage}</p>
@@ -86,14 +86,14 @@ export function DistributionChart({
 }) {
 	const maximum = Math.max(1, ...items.map((item) => item.count));
 	return (
-		<section className='rounded-xl border bg-card p-4'>
-			<h3 className='font-semibold'>{title}</h3>
+		<section className='min-w-0 overflow-hidden rounded-xl border bg-card p-4'>
+			<h3 className='break-words font-semibold'>{title}</h3>
 			<div className='mt-4 space-y-3'>
 				{items.map((item) => (
-					<div key={item.label}>
-						<div className='mb-1 flex justify-between gap-3 text-sm'>
-							<span>{item.label}</span>
-							<span className='tabular-nums text-muted-foreground'>{item.count}</span>
+					<div key={item.label} className='min-w-0'>
+						<div className='mb-1 flex min-w-0 items-start justify-between gap-3 text-sm'>
+							<span className='min-w-0 break-words'>{item.label}</span>
+							<span className='shrink-0 tabular-nums text-muted-foreground'>{item.count}</span>
 						</div>
 						<div className='h-2 overflow-hidden rounded-full bg-muted'>
 							<div className={`h-full rounded-full ${item.color ?? "bg-primary"}`} style={{ width: `${(item.count / maximum) * 100}%` }} />
